@@ -1,0 +1,39 @@
+healthCheckTimeout: 300
+unloadTimeout: 120
+globalTTL: 0
+startPort: 18500
+
+models:
+  qwen38:
+    name: "Qwen3.8 27B"
+    description: "Qwen3.8-27B UD-Q5_K_XL, optimized V100 build, persistent cache"
+    cmd: @PREFIX@/bin/run-qwen38.sh ${PORT}
+    checkEndpoint: /health
+    unloadTimeout: 120
+    ttl: 0
+    useModelName: qwen3.8-27b
+    aliases:
+      - Qwen3.8-27B
+
+  ornith15:
+    name: "Ornith 1.5 35B-A3B"
+    description: "Ornith-1.5 AD-Q5_K-Q4_K, 4x250k Q8 KV, FORCE_MMQ, Shisa MTP3"
+    cmd: @PREFIX@/bin/run-ornith15.sh ${PORT}
+    checkEndpoint: /health
+    unloadTimeout: 120
+    ttl: 0
+    useModelName: ornith-1.5-35b-a3b
+    aliases:
+      - Ornith-1.5-35B-A3B
+
+routing:
+  router:
+    use: group
+    settings:
+      groups:
+        main-and-subagent:
+          swap: true
+          exclusive: true
+          members:
+            - qwen38
+            - ornith15

@@ -1,0 +1,13 @@
+[Unit]
+Description=Local LLM model switcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=@PREFIX@/bin/start.sh
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target

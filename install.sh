@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PREFIX=${PREFIX:-$HOME/.local/share/local-llm-setup}
+BIN_LINK_DIR=${BIN_LINK_DIR:-$HOME/.local/bin}
+LLAMA_CPP_REPO=${LLAMA_CPP_REPO:-https://github.com/mistrjirka/llama.cpp.git}
+LLAMA_CPP_REF=${LLAMA_CPP_REF:-qwen38-lossless-agent-cache}
+CUDA_ARCHS=${CUDA_ARCHS:-70;86}
+JOBS=${JOBS:-$(nproc)}
+WITH_MODELS=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --models) WITH_MODELS=1 ;;
+    -h|--help)
+      cat <<EOF
+usage: ./install.sh [--models]
+
+Environment overrides:
+  PREFIX=$PREFIX
+  LLAMA_CPP_REF=$LLAMA_CPP_REF
+  CUDA_ARCHS=$CUDA_ARCHS
+  JOBS=$JOBS
+EOF
+      exit 0
+      ;;
+    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "missing dependency: $1" >&2; exit 1; }; }
+for x in git cmake python3 curl tar sha256sum; do need "$x"; done
+if ! command -v nvcc >/dev/null 2>&1; then
+  echo "nvcc was not found. Install a CUDA toolkit before running this installer." >&2
+  exit 1
+fi
+
+mkdir -p "$PREFIX" "$PREFIX/bin" "$PREFIX/config" "$PREFIX/systemd" "$BIN_LINK_DIR"
+
+SRC=$PREFIX/llama.cpp
+if [[ -d $SRC/.git ]]; then
+  echo "==> Updating llama.cpp fork"
+  git -C "$SRC" fetch --prune origin
+  git -C "$SRC" checkout "$LLAMA_CPP_REF"
+  git -C "$SRC" pull --ff-only origin "$LLAMA_CPP_REF"
+else
+  echo "==> Cloning llama.cpp fork"
+  git clone --branch "$LLAMA_CPP_REF" --single-branch "$LLAMA_CPP_REPO" "$SRC"
+fi
+
+COMMON_CMAKE=(
+  -DCMAKE_BUILD_TYPE=Release
+  -DGGML_CUDA=ON
+  "-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS"
+  -DGGML_CUDA_FA=ON
+  -DGGML_CUDA_GRAPHS=ON
+  -DGGML_CUDA_PEER_MAX_BATCH_SIZE=128
+  -DGGML_SCHED_MAX_COPIES=4
+)
+
+echo "==> Building Qwen variant (normal MMQ heuristic)"
+cmake -S "$SRC" -B "$SRC/build-qwen" "${COMMON_CMAKE[@]}" -DGGML_CUDA_FORCE_MMQ=OFF
+cmake --build "$SRC/build-qwen" --target llama-server llama-quantize llama-fit-params -j "$JOBS"
+
+echo "==> Building Ornith variant (FORCE_MMQ)"
+cmake -S "$SRC" -B "$SRC/build-ornith-mmq" "${COMMON_CMAKE[@]}" -DGGML_CUDA_FORCE_MMQ=ON
+cmake --build "$SRC/build-ornith-mmq" --target llama-server -j "$JOBS"
+
+install -m 0755 "$REPO_DIR/bin/llama_cache_proxy.py" "$PREFIX/bin/llama_cache_proxy.py"
+install -m 0755 "$REPO_DIR/bin/run-qwen38.sh" "$PREFIX/bin/run-qwen38.sh"
+install -m 0755 "$REPO_DIR/bin/run-ornith15.sh" "$PREFIX/bin/run-ornith15.sh"
+install -m 0755 "$REPO_DIR/bin/start.sh" "$PREFIX/bin/start.sh"
+install -m 0755 "$REPO_DIR/download-models.sh" "$PREFIX/bin/download-models.sh"
+
+echo "==> Installing llama-swap"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+python3 - "$TMP/release.env" <<'PY'
+import json, platform, urllib.request, sys
+out=sys.argv[1]
+arch={"x86_64":"amd64","amd64":"amd64","aarch64":"arm64","arm64":"arm64"}.get(platform.machine().lower())
+if not arch:
+    raise SystemExit(f"unsupported architecture: {platform.machine()}")
+with urllib.request.urlopen("https://api.github.com/repos/mostlygeek/llama-swap/releases/latest", timeout=30) as f:
+    release=json.load(f)
+assets={a["name"]:a["browser_download_url"] for a in release["assets"]}
+needle=f"linux_{arch}.tar.gz"
+name=next((n for n in assets if n.endswith(needle)), None)
+checks=next((n for n in assets if n.endswith("_checksums.txt")), None)
+if not name or not checks:
+    raise SystemExit("could not find llama-swap Linux release assets")
+with open(out,"w") as f:
+    f.write(f"TAG={release['tag_name']}\nASSET={name}\nURL={assets[name]}\nCHECKS_URL={assets[checks]}\n")
+PY
+# shellcheck source=/dev/null
+source "$TMP/release.env"
+curl -fL --retry 3 "$URL" -o "$TMP/$ASSET"
+curl -fL --retry 3 "$CHECKS_URL" -o "$TMP/checksums.txt"
+EXPECTED=$(awk -v f="$ASSET" '$2==f || $2=="*"f {print $1; exit}' "$TMP/checksums.txt")
+if [[ -n $EXPECTED ]]; then
+  ACTUAL=$(sha256sum "$TMP/$ASSET" | awk '{print $1}')
+  [[ $ACTUAL == "$EXPECTED" ]] || { echo "llama-swap checksum mismatch" >&2; exit 1; }
+fi
+tar -xzf "$TMP/$ASSET" -C "$TMP"
+SWAP_BIN=$(find "$TMP" -type f -name llama-swap -perm -u+x | head -1)
+[[ -n $SWAP_BIN ]] || { echo "llama-swap binary missing from release archive" >&2; exit 1; }
+install -m 0755 "$SWAP_BIN" "$PREFIX/bin/llama-swap"
+
+python3 - "$REPO_DIR/config/llama-swap.yaml.in" "$PREFIX/config/llama-swap.yaml" "$PREFIX" <<'PY'
+from pathlib import Path
+import sys
+src,dst,prefix=sys.argv[1:]
+Path(dst).write_text(Path(src).read_text().replace("@PREFIX@", prefix))
+PY
+
+if [[ ! -f $PREFIX/config/config.env ]]; then
+  cp "$REPO_DIR/config/config.env.example" "$PREFIX/config/config.env"
+else
+  echo "==> Keeping existing $PREFIX/config/config.env"
+fi
+
+python3 - "$REPO_DIR/systemd/local-llm-setup.service.in" "$PREFIX/systemd/local-llm-setup.service" "$PREFIX" <<'PY'
+from pathlib import Path
+import sys
+src,dst,prefix=sys.argv[1:]
+Path(dst).write_text(Path(src).read_text().replace("@PREFIX@", prefix))
+PY
+
+ln -sfn "$PREFIX/bin/start.sh" "$BIN_LINK_DIR/local-llm-swap"
+ln -sfn "$PREFIX/bin/download-models.sh" "$BIN_LINK_DIR/local-llm-download-models"
+
+COMMIT=$(git -C "$SRC" rev-parse HEAD)
+echo "$COMMIT" > "$PREFIX/llama.cpp.commit"
+echo "$TAG" > "$PREFIX/llama-swap.version"
+
+echo
+echo "Installed to: $PREFIX"
+echo "llama.cpp:  $COMMIT"
+echo "llama-swap: $TAG"
+if (( WITH_MODELS )); then
+  "$PREFIX/bin/download-models.sh"
+else
+  echo "Next: $PREFIX/bin/download-models.sh"
+fi
+echo "Start: $PREFIX/bin/start.sh"

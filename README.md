@@ -16,6 +16,25 @@ cd local-llm-setup
 ./install.sh --models
 ```
 
+If the target GGUFs already exist, point the installer at them instead of moving or downloading them again:
+
+```bash
+./install.sh \
+  --dense-model /path/to/Qwen3.8-27B-UD-Q5_K_XL.gguf \
+  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf \
+  --mtp-model /path/to/mtp-shisa-ornith15-bf16block-q8-embedout.gguf
+```
+
+`--dense-model` selects the model used by the normal-MMQ Qwen profile and `--moe-model` selects the model used by the FORCE_MMQ Ornith profile. These flags configure paths; the launch parameters are still tuned for Qwen3.8 and Ornith-1.5 rather than arbitrary dense/MoE architectures.
+
+The flags can be mixed with `--models`. In that case existing paths are reused and only missing artifacts are downloaded or built. For example, if both target GGUFs already exist but the fixed MTP draft does not:
+
+```bash
+./install.sh --models \
+  --dense-model /path/to/Qwen3.8-27B-UD-Q5_K_XL.gguf \
+  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf
+```
+
 Without `--models`, the installer only builds the software. Models can then be downloaded separately:
 
 ```bash

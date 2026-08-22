@@ -12,15 +12,22 @@ source "$ROOT/config/config.env"
 SRC=$ROOT/llama.cpp
 mkdir -p "$MODEL_ROOT/qwen38" "$MODEL_ROOT/ornith15"
 
-HF_VENV=$ROOT/venv-hf
-if [[ ! -x $HF_VENV/bin/hf ]]; then
-  python3 -m venv "$HF_VENV"
-  "$HF_VENV/bin/pip" install -U pip 'huggingface_hub[hf_xet]'
-fi
-HF=$HF_VENV/bin/hf
+HF=""
+need_hf_cli() {
+  if [[ -n $HF ]]; then
+    return
+  fi
+  local hf_venv=$ROOT/venv-hf
+  if [[ ! -x $hf_venv/bin/hf ]]; then
+    python3 -m venv "$hf_venv"
+    "$hf_venv/bin/pip" install -U pip 'huggingface_hub[hf_xet]'
+  fi
+  HF=$hf_venv/bin/hf
+}
 
 echo "==> Qwen3.8-27B UD-Q5_K_XL"
 if [[ ! -s $QWEN38_MODEL ]]; then
+  need_hf_cli
   "$HF" download unsloth/Qwen3.8-27B-GGUF \
     Qwen3.8-27B-UD-Q5_K_XL.gguf --local-dir "$MODEL_ROOT/qwen38"
 else
@@ -29,6 +36,7 @@ fi
 
 echo "==> Ornith-1.5-35B-A3B AD-Q5_K-Q4_K"
 if [[ ! -s $ORNITH15_MODEL ]]; then
+  need_hf_cli
   "$HF" download AtomicChat/Ornith-1.5-35B-A3B-GGUF \
     Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf --local-dir "$MODEL_ROOT/ornith15"
 else

@@ -9,13 +9,34 @@ LLAMA_CPP_REF=${LLAMA_CPP_REF:-qwen38-lossless-agent-cache}
 CUDA_ARCHS=${CUDA_ARCHS:-70;86}
 JOBS=${JOBS:-$(nproc)}
 WITH_MODELS=0
+DENSE_MODEL=""
+MOE_MODEL=""
+MTP_MODEL=""
 
-for arg in "$@"; do
-  case "$arg" in
-    --models) WITH_MODELS=1 ;;
+while (( $# )); do
+  case "$1" in
+    --models) WITH_MODELS=1; shift ;;
+    --dense-model)
+      [[ $# -ge 2 ]] || { echo "--dense-model requires a path" >&2; exit 2; }
+      DENSE_MODEL=$2; shift 2 ;;
+    --moe-model)
+      [[ $# -ge 2 ]] || { echo "--moe-model requires a path" >&2; exit 2; }
+      MOE_MODEL=$2; shift 2 ;;
+    --mtp-model)
+      [[ $# -ge 2 ]] || { echo "--mtp-model requires a path" >&2; exit 2; }
+      MTP_MODEL=$2; shift 2 ;;
+    --dense-model=*) DENSE_MODEL=${1#*=}; shift ;;
+    --moe-model=*) MOE_MODEL=${1#*=}; shift ;;
+    --mtp-model=*) MTP_MODEL=${1#*=}; shift ;;
     -h|--help)
       cat <<EOF
-usage: ./install.sh [--models]
+usage: ./install.sh [--models] [--dense-model PATH] [--moe-model PATH] [--mtp-model PATH]
+
+Model paths:
+  --dense-model PATH   existing Qwen3.8 GGUF used by the normal-MMQ build
+  --moe-model PATH     existing Ornith GGUF used by the FORCE_MMQ build
+  --mtp-model PATH     existing Ornith MTP draft GGUF
+  --models             download/build only model artifacts whose configured paths are missing
 
 Environment overrides:
   PREFIX=$PREFIX
@@ -25,8 +46,15 @@ Environment overrides:
 EOF
       exit 0
       ;;
-    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
+done
+
+for model_path in "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL"; do
+  if [[ -n $model_path && ! -s $model_path ]]; then
+    echo "model path does not exist or is empty: $model_path" >&2
+    exit 2
+  fi
 done
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing dependency: $1" >&2; exit 1; }; }
@@ -119,6 +147,32 @@ if [[ ! -f $PREFIX/config/config.env ]]; then
 else
   echo "==> Keeping existing $PREFIX/config/config.env"
 fi
+
+# CLI paths override the corresponding configured model paths without replacing
+# the rest of an existing config.env.
+python3 - "$PREFIX/config/config.env" "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL" <<'PYCFG'
+from pathlib import Path
+import shlex, sys
+path = Path(sys.argv[1])
+overrides = {
+    "QWEN38_MODEL": sys.argv[2],
+    "ORNITH15_MODEL": sys.argv[3],
+    "ORNITH15_MTP_MODEL": sys.argv[4],
+}
+lines = path.read_text().splitlines()
+for key, value in overrides.items():
+    if not value:
+        continue
+    value = str(Path(value).expanduser().resolve())
+    replacement = f"{key}={shlex.quote(value)}"
+    for i, line in enumerate(lines):
+        if line.startswith(key + "="):
+            lines[i] = replacement
+            break
+    else:
+        lines.append(replacement)
+path.write_text("\n".join(lines) + "\n")
+PYCFG
 
 python3 - "$REPO_DIR/systemd/local-llm-setup.service.in" "$PREFIX/systemd/local-llm-setup.service" "$PREFIX" <<'PY'
 from pathlib import Path

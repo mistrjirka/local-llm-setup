@@ -57,7 +57,7 @@ The OpenAI-compatible API is then on `127.0.0.1:8080` by default. The configured
 
 ## What gets installed
 
-The installer clones my `qwen38-lossless-agent-cache` llama.cpp branch and builds two variants from the same source:
+The installer clones my `v100-optimized` llama.cpp branch and builds two variants from the same source. This branch is the runtime integration branch: it follows current llama.cpp upstream while carrying the tested Volta optimizations and the local cache/prefill features used by this setup. Individual upstream PR work remains isolated on separate branches.
 
 | Model | llama.cpp build | Reason |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ journalctl --user -u local-llm-setup.service -f
 
 ## Updating
 
-Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds both variants. Existing `config.env` is preserved.
+Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds both variants. Existing `config.env` is preserved. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
 
 ```bash
 cd local-llm-setup

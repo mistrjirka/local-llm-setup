@@ -245,8 +245,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             else:
                 self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
+            is_event_stream = "text/event-stream" in (response.getheader("Content-Type") or "").lower()
             while True:
-                chunk = response.read(65536)
+                # HTTPResponse.read(n) tries to fill n bytes and can therefore buffer
+                # many SSE events. readline() forwards each SSE line as soon as it
+                # arrives; read1() keeps non-SSE responses incremental too.
+                chunk = response.readline() if is_event_stream else response.read1(65536)
                 if not chunk:
                     break
                 if has_length:

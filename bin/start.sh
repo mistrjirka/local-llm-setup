@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+HERE=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 ROOT=$(cd -- "$HERE/.." && pwd)
 # shellcheck source=/dev/null
 source "$ROOT/config/config.env"

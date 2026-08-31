@@ -19,6 +19,7 @@ exec python3 "$WRAPPER" \
   --backend-port "$BACKEND_PORT" \
   --snapshot-dir "$SNAPSHOT_DIR" \
   --slot-count 1 \
+  --parallel-tool-calls-default \
   -- "$SERVER" \
   --model "$QWEN38_MODEL" \
   --alias qwen3.8-27b \

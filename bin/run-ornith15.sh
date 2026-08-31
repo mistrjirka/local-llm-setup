@@ -39,6 +39,7 @@ exec python3 "$WRAPPER" \
   --backend-port "$BACKEND_PORT" \
   --snapshot-dir "$SNAPSHOT_DIR" \
   --slot-count "$SLOTS" \
+  --parallel-tool-calls-default \
   --reasoning-budget-map "$REASONING_MAP" \
   -- "$SERVER" \
   --model "$ORNITH15_MODEL" \

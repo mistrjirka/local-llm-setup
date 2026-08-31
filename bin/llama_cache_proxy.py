@@ -157,7 +157,7 @@ class State:
             raise RuntimeError("; ".join(errors))
 
     def transform_json(self, body: bytes, content_type: str) -> bytes:
-        if "application/json" not in content_type.lower() or not body or not self.args.reasoning_budget_map:
+        if "application/json" not in content_type.lower() or not body:
             return body
         try:
             data = json.loads(body)
@@ -165,15 +165,29 @@ class State:
             return body
         if not isinstance(data, dict):
             return body
+
+        changed = False
+        if (
+            self.args.parallel_tool_calls_default
+            and "parallel_tool_calls" not in data
+            and isinstance(data.get("tools"), list)
+            and data["tools"]
+        ):
+            data["parallel_tool_calls"] = True
+            changed = True
+
         effort = data.get("reasoning_effort")
-        if not isinstance(effort, str) or effort not in self.args.reasoning_budget_map:
-            return body
-        budget = self.args.reasoning_budget_map[effort]
-        if budget is None or budget < 0:
-            data.pop("thinking_budget_tokens", None)
-        else:
-            data["thinking_budget_tokens"] = budget
-        return json.dumps(data, separators=(",", ":")).encode()
+        if isinstance(effort, str) and effort in self.args.reasoning_budget_map:
+            budget = self.args.reasoning_budget_map[effort]
+            if budget is None or budget < 0:
+                if "thinking_budget_tokens" in data:
+                    data.pop("thinking_budget_tokens", None)
+                    changed = True
+            elif data.get("thinking_budget_tokens") != budget:
+                data["thinking_budget_tokens"] = budget
+                changed = True
+
+        return json.dumps(data, separators=(",", ":")).encode() if changed else body
 
 
 class ProxyHandler(BaseHTTPRequestHandler):
@@ -326,6 +340,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--drain-timeout", type=float, default=300)
     p.add_argument("--proxy-timeout", type=float, default=None)
     p.add_argument("--access-log", action="store_true")
+    p.add_argument(
+        "--parallel-tool-calls-default",
+        action="store_true",
+        help="default tool-enabled OpenAI chat requests to parallel_tool_calls=true unless the client overrides it",
+    )
     p.add_argument(
         "--reasoning-budget-map",
         type=parse_reasoning_map,

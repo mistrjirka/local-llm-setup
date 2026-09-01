@@ -10,7 +10,8 @@ fi
 # shellcheck source=/dev/null
 source "$ROOT/config/config.env"
 SRC=$ROOT/llama.cpp
-mkdir -p "$MODEL_ROOT/qwen38" "$MODEL_ROOT/ornith15"
+ORNITH15_MMPROJ=${ORNITH15_MMPROJ:-"$MODEL_ROOT/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"}
+mkdir -p "$MODEL_ROOT/qwen38" "$MODEL_ROOT/ornith15" "$(dirname -- "$ORNITH15_MMPROJ")"
 
 HF=""
 need_hf_cli() {
@@ -41,6 +42,21 @@ if [[ ! -s $ORNITH15_MODEL ]]; then
     Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf --local-dir "$MODEL_ROOT/ornith15"
 else
   echo "already present: $ORNITH15_MODEL"
+fi
+
+echo "==> Ornith-1.5 vision projector (BF16)"
+if [[ ! -s $ORNITH15_MMPROJ ]]; then
+  need_hf_cli
+  MMPROJ_NAME=mmproj-Ornith-1.5-35B-BF16.gguf
+  MMPROJ_DIR=$(dirname -- "$ORNITH15_MMPROJ")
+  "$HF" download ornith-ai/Ornith-1.5-35B-A3B-GGUF \
+    "$MMPROJ_NAME" --local-dir "$MMPROJ_DIR"
+  DOWNLOADED_MMPROJ="$MMPROJ_DIR/$MMPROJ_NAME"
+  if [[ $DOWNLOADED_MMPROJ != "$ORNITH15_MMPROJ" ]]; then
+    mv -f -- "$DOWNLOADED_MMPROJ" "$ORNITH15_MMPROJ"
+  fi
+else
+  echo "already present: $ORNITH15_MMPROJ"
 fi
 
 echo "==> Shisa fixed Ornith-1.5 MTP3 draft"
@@ -75,4 +91,4 @@ fi
 
 echo
 echo "Models ready:"
-ls -lh "$QWEN38_MODEL" "$ORNITH15_MODEL" "$ORNITH15_MTP_MODEL"
+ls -lh "$QWEN38_MODEL" "$ORNITH15_MODEL" "$ORNITH15_MTP_MODEL" "$ORNITH15_MMPROJ"

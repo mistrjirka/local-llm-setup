@@ -22,10 +22,11 @@ If the target GGUFs already exist, point the installer at them instead of moving
 ./install.sh \
   --dense-model /path/to/Qwen3.8-27B-UD-Q5_K_XL.gguf \
   --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf \
-  --mtp-model /path/to/mtp-shisa-ornith15-bf16block-q8-embedout.gguf
+  --mtp-model /path/to/mtp-shisa-ornith15-bf16block-q8-embedout.gguf \
+  --mmproj-model /path/to/mmproj-Ornith-1.5-35B-BF16.gguf
 ```
 
-`--dense-model` selects the model used by the normal-MMQ Qwen profile and `--moe-model` selects the model used by the FORCE_MMQ Ornith profile. These flags configure paths; the launch parameters are still tuned for Qwen3.8 and Ornith-1.5 rather than arbitrary dense/MoE architectures.
+`--dense-model` selects the model used by the normal-MMQ Qwen profile, `--moe-model` selects the model used by the FORCE_MMQ Ornith profile, and `--mmproj-model` can reuse an existing Ornith vision projector. These flags configure paths; the launch parameters are still tuned for Qwen3.8 and Ornith-1.5 rather than arbitrary dense/MoE architectures.
 
 The flags can be mixed with `--models`. In that case existing paths are reused and only missing artifacts are downloaded or built. For example, if both target GGUFs already exist but the fixed MTP draft does not:
 
@@ -71,6 +72,7 @@ The default model files are:
 - Qwen3.8-27B `UD-Q5_K_XL`
 - Ornith-1.5-35B-A3B `AD-Q5_K-Q4_K`
 - the fixed Shisa Ornith-1.5 MTP head, exported as a llama.cpp draft GGUF
+- the official Ornith BF16 vision projector `mmproj-Ornith-1.5-35B-BF16.gguf`
 
 For the MTP draft, the trained MTP block remains BF16. Only the duplicated token embedding and output projection are converted to Q8_0 to save VRAM.
 
@@ -109,6 +111,7 @@ Q8_0 K cache
 Q8_0 V cache
 AD-Q5_K-Q4_K target
 Shisa fixed MTP3
+BF16 vision mmproj (CPU by default)
 FORCE_MMQ
 ```
 
@@ -177,9 +180,11 @@ ORNITH15_PARALLEL=4
 ORNITH15_CTX_PER_SLOT=250112
 QWEN38_CACHE_RAM_MIB=65536
 ORNITH15_CACHE_RAM_MIB=32768
+ORNITH15_MMPROJ="$HOME/models/local-llm-setup/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"
+ORNITH15_MMPROJ_OFFLOAD=0
 ```
 
-Existing model files can be reused by changing `QWEN38_MODEL`, `ORNITH15_MODEL` and `ORNITH15_MTP_MODEL` rather than downloading another copy.
+Existing model files can be reused by changing `QWEN38_MODEL`, `ORNITH15_MODEL`, `ORNITH15_MTP_MODEL` and `ORNITH15_MMPROJ` rather than downloading another copy. The projector stays on CPU by default so the tuned four-slot GPU placement retains its VRAM headroom; set `ORNITH15_MMPROJ_OFFLOAD=1` to move it to a GPU, optionally with `ORNITH15_MMPROJ_DEVICE=CUDA0` (or another llama.cpp device).
 
 ## systemd user service
 

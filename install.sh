@@ -12,6 +12,7 @@ WITH_MODELS=0
 DENSE_MODEL=""
 MOE_MODEL=""
 MTP_MODEL=""
+MMPROJ_MODEL=""
 
 while (( $# )); do
   case "$1" in
@@ -25,17 +26,22 @@ while (( $# )); do
     --mtp-model)
       [[ $# -ge 2 ]] || { echo "--mtp-model requires a path" >&2; exit 2; }
       MTP_MODEL=$2; shift 2 ;;
+    --mmproj-model)
+      [[ $# -ge 2 ]] || { echo "--mmproj-model requires a path" >&2; exit 2; }
+      MMPROJ_MODEL=$2; shift 2 ;;
     --dense-model=*) DENSE_MODEL=${1#*=}; shift ;;
     --moe-model=*) MOE_MODEL=${1#*=}; shift ;;
     --mtp-model=*) MTP_MODEL=${1#*=}; shift ;;
+    --mmproj-model=*) MMPROJ_MODEL=${1#*=}; shift ;;
     -h|--help)
       cat <<EOF
-usage: ./install.sh [--models] [--dense-model PATH] [--moe-model PATH] [--mtp-model PATH]
+usage: ./install.sh [--models] [--dense-model PATH] [--moe-model PATH] [--mtp-model PATH] [--mmproj-model PATH]
 
 Model paths:
   --dense-model PATH   existing Qwen3.8 GGUF used by the normal-MMQ build
   --moe-model PATH     existing Ornith GGUF used by the FORCE_MMQ build
   --mtp-model PATH     existing Ornith MTP draft GGUF
+  --mmproj-model PATH  existing Ornith vision projector GGUF
   --models             download/build only model artifacts whose configured paths are missing
 
 Environment overrides:
@@ -50,7 +56,7 @@ EOF
   esac
 done
 
-for model_path in "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL"; do
+for model_path in "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL" "$MMPROJ_MODEL"; do
   if [[ -n $model_path && ! -s $model_path ]]; then
     echo "model path does not exist or is empty: $model_path" >&2
     exit 2
@@ -150,7 +156,7 @@ fi
 
 # CLI paths override the corresponding configured model paths without replacing
 # the rest of an existing config.env.
-python3 - "$PREFIX/config/config.env" "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL" <<'PYCFG'
+python3 - "$PREFIX/config/config.env" "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL" "$MMPROJ_MODEL" <<'PYCFG'
 from pathlib import Path
 import shlex, sys
 path = Path(sys.argv[1])
@@ -158,6 +164,7 @@ overrides = {
     "QWEN38_MODEL": sys.argv[2],
     "ORNITH15_MODEL": sys.argv[3],
     "ORNITH15_MTP_MODEL": sys.argv[4],
+    "ORNITH15_MMPROJ": sys.argv[5],
 }
 lines = path.read_text().splitlines()
 for key, value in overrides.items():

@@ -16,6 +16,17 @@ SLOTS=${ORNITH15_PARALLEL:-4}
 CTX_PER_SLOT=${ORNITH15_CTX_PER_SLOT:-250112}
 CTX_TOTAL=$((SLOTS * CTX_PER_SLOT))
 REASONING_MAP=${ORNITH15_REASONING_MAP:-'{"none":0,"low":2048,"medium":8192,"high":32768,"xhigh":-1}'}
+MMPROJ=${ORNITH15_MMPROJ:-"$MODEL_ROOT/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"}
+[[ -s $MMPROJ ]] || { echo "missing Ornith vision projector: $MMPROJ" >&2; exit 1; }
+MMPROJ_ARGS=(--mmproj "$MMPROJ")
+if [[ ${ORNITH15_MMPROJ_OFFLOAD:-0} == 1 ]]; then
+  MMPROJ_ARGS+=(--mmproj-offload)
+  if [[ -n ${ORNITH15_MMPROJ_DEVICE:-} ]]; then
+    MMPROJ_ARGS+=(--mmproj-device "$ORNITH15_MMPROJ_DEVICE")
+  fi
+else
+  MMPROJ_ARGS+=(--no-mmproj-offload)
+fi
 mkdir -p "$SNAPSHOT_DIR"
 
 # This placement is tuned for V100 32 GB (CUDA0 in llama.cpp) + 3060 Ti 8 GB
@@ -44,6 +55,7 @@ exec python3 "$WRAPPER" \
   -- "$SERVER" \
   --model "$ORNITH15_MODEL" \
   --alias ornith-1.5-35b-a3b \
+  "${MMPROJ_ARGS[@]}" \
   --ctx-size "$CTX_TOTAL" \
   --parallel "$SLOTS" \
   --no-kv-unified \

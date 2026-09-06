@@ -29,10 +29,9 @@ else
 fi
 mkdir -p "$SNAPSHOT_DIR"
 
-# This placement is tuned for V100 32 GB (CUDA0 in llama.cpp) + 3060 Ti 8 GB
-# (CUDA1), AD-Q5_K-Q4_K target, four 250112-token Q8/Q8 slots and the
-# Shisa MTP draft on CUDA1. For a different GPU topology, override
-# ORNITH15_EXTRA_ARGS in config.env.
+# Conservative Ornith placement retained from the previous two-GPU profile.
+# It is intentionally independent of the V100 + RTX 2080 Ti Qwen tensor-parallel
+# tuning. Override ORNITH15_EXTRA_ARGS in config.env when retuning Ornith.
 DEFAULT_PLACEMENT=(
   --gpu-layers 41
   --tensor-split 40,1

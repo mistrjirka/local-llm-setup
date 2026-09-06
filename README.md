@@ -1,6 +1,6 @@
 # local-llm-setup
 
-This is my local two-model llama.cpp setup for a V100 32 GB + RTX 3060 Ti 8 GB machine.
+This is my local two-model llama.cpp setup for a V100 32 GB + RTX 2080 Ti 22 GB machine.
 
 The main model is Qwen3.8-27B. Ornith-1.5-35B-A3B is used for subagents. llama-swap loads only the model that is needed, while a small wrapper saves llama.cpp slot state before unloading and restores it when that model comes back. This means switching to a subagent does not require rebuilding the main agent's long prompt cache from scratch.
 
@@ -78,30 +78,36 @@ For the MTP draft, the trained MTP block remains BF16. Only the duplicated token
 
 ## Why two builds
 
-On the exact `100k cached + 1k new + 64 generated` workload, using our current fork on this machine:
+Qwen3.8 and Ornith exercise very different CUDA paths, so the installer keeps two llama.cpp builds from the same `v100-optimized` source tree:
 
-| Qwen3.8-27B | PP | TG |
-| --- | ---: | ---: |
-| normal build | **452.8 tok/s** | 26.66 tok/s |
-| FORCE_MMQ | 323.2 tok/s | 26.54 tok/s |
+- Qwen3.8 uses the normal MMQ heuristic. On the V100 + RTX 2080 Ti, the current profile uses tensor parallelism across both GPUs and the tuned dense-matmul/attention dispatch in the fork.
+- Ornith uses `GGML_CUDA_FORCE_MMQ=ON` because its routed MoE path benefits from staying on the GPU instead of falling back through the slower host-routed path.
 
-So globally forcing MMQ costs Qwen about 29% of prompt-processing performance.
+### Qwen3.8 full-context profile
 
-For Ornith with the fixed MTP3 head:
+The default Qwen launcher is configured for the model's full **262144-token context capacity** with a single slot:
 
-| Ornith-1.5 AD-Q6_K | PP | TG |
-| --- | ---: | ---: |
-| vanilla llama.cpp | 544.1 tok/s | 67.26 tok/s |
-| our fork, normal MMQ heuristic | 644.2 tok/s | 68.99 tok/s |
-| **our fork + FORCE_MMQ** | **882.6 tok/s** | **70.80 tok/s** |
+```text
+V100 32 GB + RTX 2080 Ti 22 GB
+split mode: tensor
+llama.cpp device order: CUDA1,CUDA0
+split: 4:5 (RTX 2080 Ti : V100)
+FP16 K/V cache
+4096 batch / 4096 ubatch
+1 pipeline copy
+MTP n-max=3 with prompt deferral
+internal host-staged CUDA AllReduce
+```
 
-The generated 64-token sequence was identical in those matched tests. FORCE_MMQ is therefore useful for Ornith but should not be enabled globally for Qwen.
+During the tuning work llama.cpp enumerated the V100 as `CUDA0` and the RTX 2080 Ti as `CUDA1`, so the launcher deliberately passes `--device CUDA1,CUDA0`. If enumeration differs on another host, set `QWEN38_DEVICE_ORDER` rather than changing the script.
 
-The reason is the routed MoE path. On Volta, a large quantized `MUL_MAT_ID` can otherwise fall back to a path that copies routing information to the CPU, synchronizes the CUDA stream, sorts tokens by expert on the CPU, copies the result back, and launches expert matmuls separately. FORCE_MMQ keeps this operation on the GPU. Qwen's large dense matmuls are different and benefit from the normal FP16 Tensor Core/cuBLAS route.
+The launcher also enables the measured topology-specific settings used by the optimized fork: a 128 KiB internal-AllReduce copy threshold, the SM75 large-prompt cuBLAS crossover at batch 256, the Volta Qwen kernels, and the exact Qwen3.8 MTP shortlist shipped with the llama.cpp fork.
+
+The full 262144 context is the default rather than a reduced 250k operating target. `QWEN38_CTX_SIZE` remains configurable for troubleshooting or alternate deployments.
 
 ## Long-context subagent profile
 
-The default Ornith profile is tuned for the exact V100 32 GB + 3060 Ti 8 GB setup:
+The Ornith profile retains the previously validated conservative placement; the Qwen V100 + RTX 2080 Ti tensor-parallel retune does not change Ornith placement:
 
 ```text
 4 slots
@@ -117,7 +123,7 @@ FORCE_MMQ
 
 I tested the full configuration with four requests generating concurrently. It fits and all four slots remain available. To preserve Q8/Q8 KV at this context size, some expert tensors from late Ornith layers are intentionally left on the CPU.
 
-This placement assumes llama.cpp sees the V100 as `CUDA0` and the 3060 Ti as `CUDA1`. Check the startup log on another system before using the same tensor overrides.
+This placement assumes llama.cpp sees the V100 as `CUDA0` and the secondary NVIDIA GPU as `CUDA1`. It predates the RTX 2080 Ti Qwen retune and remains separately overrideable through `ORNITH15_EXTRA_ARGS`.
 
 For a different GPU layout, edit:
 
@@ -217,4 +223,4 @@ The model downloader skips files that already exist.
 
 ## Notes
 
-This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The tested default profile assumes 40 GB of combined NVIDIA VRAM split as V100 32 GB + 3060 Ti 8 GB. The wrapper itself is model-agnostic, but tensor placement, context size and the choice to FORCE_MMQ for Ornith are tuned for this machine.
+This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the full 262144-token model context. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith keeps its separately configurable conservative placement.

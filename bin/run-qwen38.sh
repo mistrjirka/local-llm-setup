@@ -12,7 +12,26 @@ SERVER="$ROOT/llama.cpp/build-qwen/bin/llama-server"
 WRAPPER="$ROOT/bin/llama_cache_proxy.py"
 BACKEND_PORT=${QWEN38_BACKEND_PORT:-$((PORT + 10000))}
 SNAPSHOT_DIR=${LLAMA_CACHE_ROOT}/qwen38
+CTX_SIZE=${QWEN38_CTX_SIZE:-262144}
+DEVICE_ORDER=${QWEN38_DEVICE_ORDER:-CUDA1,CUDA0}
+TENSOR_SPLIT=${QWEN38_TENSOR_SPLIT:-4,5}
+CACHE_TYPE_K=${QWEN38_CACHE_TYPE_K:-f16}
+CACHE_TYPE_V=${QWEN38_CACHE_TYPE_V:-f16}
+SHORTLIST=${GGML_CUDA_QWEN35_MTP_SHORTLIST:-"$ROOT/llama.cpp/data/mtp-shortlists/qwen38-27b-exact-131072.i32"}
+[[ -s $SHORTLIST ]] || { echo "missing Qwen3.8 MTP shortlist: $SHORTLIST" >&2; exit 1; }
 mkdir -p "$SNAPSHOT_DIR"
+
+# Validated V100 32 GB + RTX 2080 Ti 22 GB tensor-parallel profile.
+# llama.cpp enumerated V100=CUDA0 and RTX 2080 Ti=CUDA1 during tuning, hence
+# CUDA1 first here and the 4:5 split is RTX:V100. Keep these configurable for
+# hosts whose CUDA enumeration differs.
+export GGML_CUDA_ALLREDUCE=${GGML_CUDA_ALLREDUCE:-internal}
+export GGML_CUDA_AR_COPY_THRESHOLD=${GGML_CUDA_AR_COPY_THRESHOLD:-131072}
+export GGML_CUDA_TURING_CUBLAS_MIN_BATCH=${GGML_CUDA_TURING_CUBLAS_MIN_BATCH:-256}
+export GGML_CUDA_VOLTA_Q8_FATTN_TC=${GGML_CUDA_VOLTA_Q8_FATTN_TC:-1}
+export GGML_CUDA_VOLTA_Q5_X4=${GGML_CUDA_VOLTA_Q5_X4:-1}
+export GGML_CUDA_VOLTA_Q6_W4R4=${GGML_CUDA_VOLTA_Q6_W4R4:-1}
+export GGML_CUDA_QWEN35_MTP_SHORTLIST=$SHORTLIST
 
 exec python3 "$WRAPPER" \
   --listen-port "$PORT" \
@@ -23,19 +42,20 @@ exec python3 "$WRAPPER" \
   -- "$SERVER" \
   --model "$QWEN38_MODEL" \
   --alias qwen3.8-27b \
-  --ctx-size 262144 \
+  --ctx-size "$CTX_SIZE" \
   --parallel 1 \
-  --split-mode layer \
+  --split-mode tensor \
   --fit off \
   --gpu-layers all \
-  --tensor-split 64,2 \
+  --device "$DEVICE_ORDER" \
+  --tensor-split "$TENSOR_SPLIT" \
   --flash-attn on \
   --batch-size 4096 \
   --ubatch-size 4096 \
   --prefill-reuse 1024 \
-  --pipeline-copies 2 \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
+  --pipeline-copies 1 \
+  --cache-type-k "$CACHE_TYPE_K" \
+  --cache-type-v "$CACHE_TYPE_V" \
   --cache-type-k-draft f16 \
   --cache-type-v-draft f16 \
   --cache-ram "${QWEN38_CACHE_RAM_MIB:-65536}" \
@@ -43,8 +63,9 @@ exec python3 "$WRAPPER" \
   --ctx-checkpoints 32 \
   --checkpoint-min-step 8192 \
   --spec-type draft-mtp \
-  --spec-draft-n-max 2 \
+  --spec-draft-n-max 3 \
   --spec-draft-ubatch 1024 \
+  --spec-mtp-defer-prompt \
   --temp 1.0 \
   --top-p 0.95 \
   --top-k 20 \

@@ -83,27 +83,42 @@ Qwen3.8 and Ornith exercise very different CUDA paths, so the installer keeps tw
 - Qwen3.8 uses the normal MMQ heuristic. On the V100 + RTX 2080 Ti, the current profile uses tensor parallelism across both GPUs and the tuned dense-matmul/attention dispatch in the fork.
 - Ornith uses `GGML_CUDA_FORCE_MMQ=ON` because its routed MoE path benefits from staying on the GPU instead of falling back through the slower host-routed path.
 
-### Qwen3.8 full-context profile
+### Qwen3.8 400k YaRN profile
 
-The default Qwen launcher is configured for the model's full **262144-token context capacity** with a single slot:
+The default Qwen launcher uses the validated **409600-token** extended-context profile on the V100 32 GB + RTX 2080 Ti 22 GB pair. Qwen3.8 is native at 262144 tokens, so the launcher enables static YaRN only when `QWEN38_CTX_SIZE` is above that native limit.
 
 ```text
 V100 32 GB + RTX 2080 Ti 22 GB
 split mode: tensor
 llama.cpp device order: CUDA1,CUDA0
 split: 4:5 (RTX 2080 Ti : V100)
-FP16 K/V cache
-4096 batch / 4096 ubatch
+context: 409600
+YaRN original context: 262144
+YaRN factor: 1.5625 (= 409600 / 262144)
+q8_0 target K/V cache; FP16 MTP K/V
+4096 batch / 2048 ubatch
+MTP n-max=3 / draft ubatch 512 with prompt deferral
 1 pipeline copy
-MTP n-max=3 with prompt deferral
 internal host-staged CUDA AllReduce
 ```
 
-During the tuning work llama.cpp enumerated the V100 as `CUDA0` and the RTX 2080 Ti as `CUDA1`, so the launcher deliberately passes `--device CUDA1,CUDA0`. If enumeration differs on another host, set `QWEN38_DEVICE_ORDER` rather than changing the script.
+llama.cpp needs both the RoPE scaling and a metadata override so its server slot is not capped at the GGUF's native 262144-token metadata. The launcher therefore adds, for the default 400k profile:
 
-The launcher also enables the measured topology-specific settings used by the optimized fork: a 128 KiB internal-AllReduce copy threshold, the SM75 large-prompt cuBLAS crossover at batch 256, the Volta Qwen kernels, and the exact Qwen3.8 MTP shortlist shipped with the llama.cpp fork.
+```text
+--ctx-size 409600
+--override-kv qwen35.context_length=int:409600
+--rope-scaling yarn
+--rope-scale 1.5625
+--yarn-orig-ctx 262144
+```
 
-The full 262144 context is the default rather than a reduced 250k operating target. `QWEN38_CTX_SIZE` remains configurable for troubleshooting or alternate deployments.
+This exact capacity was validated on the target machine with `UD-Q5_K_XL`: a real 400000-token q8_0 cache followed by +1001 prompt tokens measured **230.43 PP/s**, **4.47 s TTFT**, and **28.12 TG/s** over 256 generated tokens with MTP3 (189/197 drafted tokens accepted). After the request the RTX 2080 Ti used about 20.94/22.0 GiB and the V100 about 23.05/32.0 GiB. The one-time 100k→400k cache construction measured 379.09 PP/s and is not the steady agent-turn figure.
+
+Qwen's guidance for static YaRN is to choose a factor matching the context actually needed rather than always using the 4x 1M setting; for example it recommends factor 2 for 524288. The launcher follows the same rule and computes `QWEN38_CTX_SIZE / QWEN38_NATIVE_CTX` if `QWEN38_YARN_SCALE` is unset. Static YaRN is not enabled at or below 262144 because it can hurt short-context behavior.
+
+During tuning llama.cpp enumerated the V100 as `CUDA0` and the RTX 2080 Ti as `CUDA1`, so the launcher deliberately passes `--device CUDA1,CUDA0`. If enumeration differs on another host, set `QWEN38_DEVICE_ORDER`. The topology-specific settings remain the measured 128 KiB internal-AllReduce copy threshold, SM75 large-prompt cuBLAS crossover at batch 256, Volta Qwen kernels, and exact Qwen3.8 MTP shortlist.
+
+To return to native context, set `QWEN38_CTX_SIZE=262144`; the launcher then omits all YaRN/metadata-override arguments. For the historical native-context profile, FP16 target KV and 4096 ubatch remain available through `QWEN38_CACHE_TYPE_K=f16`, `QWEN38_CACHE_TYPE_V=f16`, and `QWEN38_UBATCH_SIZE=4096`. Extended-context slot snapshots are namespaced by context and KV type so an old 262k/F16 state is never restored into the 400k/q8 profile.
 
 ## Long-context subagent profile
 
@@ -223,4 +238,4 @@ The model downloader skips files that already exist.
 
 ## Notes
 
-This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the full 262144-token model context. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith keeps its separately configurable conservative placement.
+This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith keeps its separately configurable conservative placement.

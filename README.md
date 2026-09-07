@@ -135,7 +135,9 @@ draft KV: Q8_0 / Q8_0
 BF16 vision projector on CPU
 ```
 
-The exact `AD-Q6_K-Q5_K` GGUF tensor layout was capacity-tested with the production geometry, including the CPU vision projector. At startup the RTX 2080 Ti used about **20.22/22.0 GiB** and the V100 about **31.48/32.5 GiB**, leaving roughly **1.78 GiB** and **1.02 GiB** respectively. All four slots reported `n_ctx=350000` with MTP enabled. The MTP draft is deliberately placed on `CUDA1`; placing it on the V100 crosses the V100 allocation boundary.
+The real full `AD-Q6_K-Q5_K` GGUF is validated with this production geometry, including the CPU vision projector. In fixed-350k mode all four slots report `n_ctx=350000` with MTP enabled. The MTP draft is deliberately placed on `CUDA1`; placing it on the V100 crosses the V100 allocation boundary.
+
+A near-limit real-model benchmark at **348744 cached + 1000 prompt + 256 generated** measured **388.91 PP/s** (2.571 s for the 1k append) and **33.11 TG/s** with MTP3 (150/312 drafts accepted). The previous `AD-Q5_K-Q4_K` model under the same geometry measured **385.62 PP/s / 33.26 TG/s** (149/315 accepted), so moving to `AD-Q6_K-Q5_K` was **+0.85% PP / -0.45% TG** in this test while improving quantization fidelity. The 348744-token one-time Q6/Q5 cache construction averaged **776.60 PP/s**; its deferred MTP catch-up is persisted by the `.draft`/`.spec` slot companions.
 
 The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0.025137 (the old `AD-Q5_K-Q4_K`) to 0.015793 and top-1 agreement from 93.52% to 94.85%. The Shisa MTP head is quantized fully to Q5_0: in a matched local 100k+1k+256 test it used 1.36 GB, reached **99.70 TG/s** with **68.4%** draft acceptance, and produced the same target-token SHA as the older 2.78 GB BF16-core/Q8 draft. Target verification makes draft-weight quantization lossless with respect to final target tokens.
 
@@ -147,7 +149,7 @@ The default `ORNITH15_SHARED_400K=1` exposes **four logical 400000-token slots**
 
 The capacity is intentionally conditional rather than four independent 400k guarantees. For four histories of length `L_i` with a common prefix `P`, physical attention-KV occupancy is approximately `sum(L_i) - 3P`. At four full 400k histories, the 1.4M pool therefore needs at least **66,667 common-prefix tokens**. A 100k common parent leaves about 100k tokens of additional physical-pool margin at four full logical caps. Completely unrelated four-way 400k histories still need 1.6M cells and do not fit this GPU pair.
 
-The final production geometry was capacity-tested on the V100 32 GB + RTX 2080 Ti 22 GB pair: all four slots reported `n_ctx=400000`, with Q8 target and draft KV plus MTP3 enabled. Startup used about **20.99/22.0 GiB** on the RTX 2080 Ti and **31.99/32.5 GiB** on the V100. The physical KV buffer is preallocated, so growing a shared agent does not progressively allocate more VRAM. The 400k shared-prefix profile is now the default. Set `ORNITH15_SHARED_400K=0` to use the conservative 350k fixed-slot profile when four completely unrelated histories must each have guaranteed capacity.
+The final production geometry was validated with the real full `AD-Q6_K-Q5_K` GGUF on the V100 32 GB + RTX 2080 Ti 22 GB pair: all four slots reported `n_ctx=400000`, with Q8 target and draft KV plus MTP3 enabled. Startup used **20990 MiB** on the RTX 2080 Ti and **31985 MiB** on the V100, leaving about **1011 MiB** and **510 MiB** respectively. The physical KV buffer is preallocated, so growing a shared agent does not progressively allocate more VRAM. The 400k shared-prefix profile is now the default. Set `ORNITH15_SHARED_400K=0` to use the conservative 350k fixed-slot profile when four completely unrelated histories must each have guaranteed capacity.
 
 Shared-400k snapshots use a separate namespace including the unified-pool size, target/draft KV types, MTP depth and draft-model name. Do not reuse fixed-slot snapshots across the two layouts.
 

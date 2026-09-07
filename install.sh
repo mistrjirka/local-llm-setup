@@ -39,7 +39,7 @@ usage: ./install.sh [--models] [--dense-model PATH] [--moe-model PATH] [--mtp-mo
 
 Model paths:
   --dense-model PATH   existing Qwen3.8 GGUF used by the normal-MMQ build
-  --moe-model PATH     existing Ornith GGUF used by the FORCE_MMQ build
+  --moe-model PATH     existing Ornith GGUF used by the selective runtime MoE-MMQ profile
   --mtp-model PATH     existing Ornith MTP draft GGUF
   --mmproj-model PATH  existing Ornith vision projector GGUF
   --models             download/build only model artifacts whose configured paths are missing
@@ -93,13 +93,9 @@ COMMON_CMAKE=(
   -DGGML_SCHED_MAX_COPIES=4
 )
 
-echo "==> Building Qwen variant (normal MMQ heuristic)"
+echo "==> Building shared CUDA server (Qwen + selective Ornith MoE MMQ)"
 cmake -S "$SRC" -B "$SRC/build-qwen" "${COMMON_CMAKE[@]}" -DGGML_CUDA_FORCE_MMQ=OFF
 cmake --build "$SRC/build-qwen" --target llama-server llama-quantize llama-fit-params -j "$JOBS"
-
-echo "==> Building Ornith variant (FORCE_MMQ)"
-cmake -S "$SRC" -B "$SRC/build-ornith-mmq" "${COMMON_CMAKE[@]}" -DGGML_CUDA_FORCE_MMQ=ON
-cmake --build "$SRC/build-ornith-mmq" --target llama-server -j "$JOBS"
 
 install -m 0755 "$REPO_DIR/bin/llama_cache_proxy.py" "$PREFIX/bin/llama_cache_proxy.py"
 install -m 0755 "$REPO_DIR/bin/run-qwen38.sh" "$PREFIX/bin/run-qwen38.sh"

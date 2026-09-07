@@ -35,11 +35,11 @@ else
   echo "already present: $QWEN38_MODEL"
 fi
 
-echo "==> Ornith-1.5-35B-A3B AD-Q5_K-Q4_K"
+echo "==> Ornith-1.5-35B-A3B AD-Q6_K-Q5_K"
 if [[ ! -s $ORNITH15_MODEL ]]; then
   need_hf_cli
   "$HF" download AtomicChat/Ornith-1.5-35B-A3B-GGUF \
-    Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf --local-dir "$MODEL_ROOT/ornith15"
+    Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf --local-dir "$MODEL_ROOT/ornith15"
 else
   echo "already present: $ORNITH15_MODEL"
 fi
@@ -59,7 +59,7 @@ else
   echo "already present: $ORNITH15_MMPROJ"
 fi
 
-echo "==> Shisa fixed Ornith-1.5 MTP3 draft"
+echo "==> Shisa 12K KL-distilled Ornith-1.5 MTP draft (Q5_0)"
 if [[ ! -s $ORNITH15_MTP_MODEL ]]; then
   CONVERT_VENV=$ROOT/venv-convert
   if [[ ! -x $CONVERT_VENV/bin/python ]]; then
@@ -75,13 +75,9 @@ if [[ ! -s $ORNITH15_MTP_MODEL ]]; then
       shisa-ai/Ornith-1.5-35B-A3B-MTP
   fi
 
-  # Start from Q8_0, but explicitly keep every substantial tensor in the
-  # trained MTP block at BF16. The only large tensors left to quantize are the
-  # duplicated token embedding and output projection. This reproduces the
-  # 2.64 GiB draft used in our tests.
-  "$SRC/build-qwen/bin/llama-quantize" \
-    --tensor-type 'blk\..*(attn_(k|q|v|output)|ffn_(down|gate|up)_(exps|shexp)|nextn\.eh_proj)\.weight=bf16' \
-    "$BF16" "$ORNITH15_MTP_MODEL" Q8_0
+  # Fully-Q5_0 was smaller and faster than the old BF16-core/Q8 draft in
+  # matched target-verified local tests.
+  "$SRC/build-qwen/bin/llama-quantize" "$BF16" "$ORNITH15_MTP_MODEL" Q5_0
   if [[ ${KEEP_MTP_BF16:-0} != 1 ]]; then
     rm -f "$BF16"
   fi

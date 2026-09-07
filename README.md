@@ -4,7 +4,7 @@ This is my local two-model llama.cpp setup for a V100 32 GB + RTX 2080 Ti 22 GB 
 
 The main model is Qwen3.8-27B. Ornith-1.5-35B-A3B is used for subagents. llama-swap loads only the model that is needed, while a small wrapper saves llama.cpp slot state before unloading and restores it when that model comes back. This means switching to a subagent does not require rebuilding the main agent's long prompt cache from scratch.
 
-The setup intentionally builds llama.cpp twice. Qwen3.8 is much faster on the normal Volta/cuBLAS path, while Ornith's routed MoE layers are much faster with `GGML_CUDA_FORCE_MMQ=ON`.
+The setup uses one `v100-optimized` llama.cpp CUDA build. Qwen keeps normal dense dispatch, while Ornith enables `GGML_CUDA_VOLTA_FORCE_MMQ=moe` so only Volta routed-expert matmuls are forced through MMQ.
 
 ## Install
 
@@ -21,19 +21,19 @@ If the target GGUFs already exist, point the installer at them instead of moving
 ```bash
 ./install.sh \
   --dense-model /path/to/Qwen3.8-27B-UD-Q5_K_XL.gguf \
-  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf \
-  --mtp-model /path/to/mtp-shisa-ornith15-bf16block-q8-embedout.gguf \
+  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf \
+  --mtp-model /path/to/mtp-shisa-ornith15-all-Q5_0.gguf \
   --mmproj-model /path/to/mmproj-Ornith-1.5-35B-BF16.gguf
 ```
 
-`--dense-model` selects the model used by the normal-MMQ Qwen profile, `--moe-model` selects the model used by the FORCE_MMQ Ornith profile, and `--mmproj-model` can reuse an existing Ornith vision projector. These flags configure paths; the launch parameters are still tuned for Qwen3.8 and Ornith-1.5 rather than arbitrary dense/MoE architectures.
+`--dense-model` selects the Qwen target, `--moe-model` selects the Ornith target, and `--mmproj-model` can reuse an existing Ornith vision projector. These flags configure paths; the launch parameters are still tuned for Qwen3.8 and Ornith-1.5 rather than arbitrary dense/MoE architectures.
 
 The flags can be mixed with `--models`. In that case existing paths are reused and only missing artifacts are downloaded or built. For example, if both target GGUFs already exist but the fixed MTP draft does not:
 
 ```bash
 ./install.sh --models \
   --dense-model /path/to/Qwen3.8-27B-UD-Q5_K_XL.gguf \
-  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf
+  --moe-model /path/to/Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf
 ```
 
 Without `--models`, the installer only builds the software. Models can then be downloaded separately:
@@ -58,30 +58,27 @@ The OpenAI-compatible API is then on `127.0.0.1:8080` by default. The configured
 
 ## What gets installed
 
-The installer clones my `v100-optimized` llama.cpp branch and builds two variants from the same source. This branch is the runtime integration branch: it follows current llama.cpp upstream while carrying the tested Volta optimizations and the local cache/prefill features used by this setup. Individual upstream PR work remains isolated on separate branches.
+The installer clones my `v100-optimized` llama.cpp branch and builds one CUDA server used by both profiles. This branch is the runtime integration branch: it follows current llama.cpp upstream while carrying the tested Volta optimizations and the local cache/prefill features used by this setup. Individual upstream PR work remains isolated on separate branches.
 
-| Model | llama.cpp build | Reason |
+| Model | CUDA dispatch | Reason |
 | --- | --- | --- |
-| Qwen3.8-27B | normal MMQ heuristic | keeps the fast V100 FP16/cuBLAS path for large dense matmuls |
-| Ornith-1.5-35B-A3B | `GGML_CUDA_FORCE_MMQ=ON` | avoids the very slow large-batch routed-MoE fallback on Volta |
+| Qwen3.8-27B | normal heuristic | keeps the fast dense V100 path |
+| Ornith-1.5-35B-A3B | runtime `GGML_CUDA_VOLTA_FORCE_MMQ=moe` | forces MMQ only for Volta MoE experts |
 
 It also downloads the current Linux llama-swap release and installs the cache-preserving wrapper from this repository.
 
 The default model files are:
 
 - Qwen3.8-27B `UD-Q5_K_XL`
-- Ornith-1.5-35B-A3B `AD-Q5_K-Q4_K`
-- the fixed Shisa Ornith-1.5 MTP head, exported as a llama.cpp draft GGUF
+- Ornith-1.5-35B-A3B `AD-Q6_K-Q5_K`
+- the Shisa 12K KL-distilled Ornith MTP head, exported as a Q5_0 draft GGUF
 - the official Ornith BF16 vision projector `mmproj-Ornith-1.5-35B-BF16.gguf`
 
-For the MTP draft, the trained MTP block remains BF16. Only the duplicated token embedding and output projection are converted to Q8_0 to save VRAM.
+The MTP draft is fully Q5_0. In a matched local 100k+1k+256 test it used 1.36 GB instead of 2.78 GB, raised TG from 78.17 to 99.70 tok/s, and produced the same target-token SHA.
 
-## Why two builds
+## Runtime CUDA dispatch
 
-Qwen3.8 and Ornith exercise very different CUDA paths, so the installer keeps two llama.cpp builds from the same `v100-optimized` source tree:
-
-- Qwen3.8 uses the normal MMQ heuristic. On the V100 + RTX 2080 Ti, the current profile uses tensor parallelism across both GPUs and the tuned dense-matmul/attention dispatch in the fork.
-- Ornith uses `GGML_CUDA_FORCE_MMQ=ON` because its routed MoE path benefits from staying on the GPU instead of falling back through the slower host-routed path.
+Both models use the same normal CUDA build. Ornith adds selective Volta MoE MMQ (`GGML_CUDA_VOLTA_FORCE_MMQ=moe`) plus the tuned GQA8 ncols2 path.
 
 ### Qwen3.8 400k YaRN profile
 
@@ -122,31 +119,26 @@ To return to native context, set `QWEN38_CTX_SIZE=262144`; the launcher then omi
 
 ## Long-context subagent profile
 
-The Ornith profile retains the previously validated conservative placement; the Qwen V100 + RTX 2080 Ti tensor-parallel retune does not change Ornith placement:
+The default Ornith profile is **four persistent 400000-token slots** with target Q8 KV:
 
 ```text
-4 slots
-250112 tokens per slot
-1000448 total llama.cpp context
-Q8_0 K cache
-Q8_0 V cache
-AD-Q5_K-Q4_K target
-Shisa fixed MTP3
-BF16 vision mmproj (CPU by default)
-FORCE_MMQ
+4 fixed slots x 400000 tokens
+YaRN: 400000 / 262144 = 1.52587890625
+target KV: Q8_0 / Q8_0
+target weights: AD-Q6_K-Q5_K (26.25 GB)
+split mode: layer, CUDA1,CUDA0, split 4:5
+Shisa 12K KL-distilled Q5_0 draft on CUDA0 (V100)
+MTP n-max=2
+draft KV: Q4_0 / Q4_0
+2048 batch / 128 ubatch / 64 draft ubatch
+BF16 vision projector on CPU
 ```
 
-I tested the full configuration with four requests generating concurrently. It fits and all four slots remain available. To preserve Q8/Q8 KV at this context size, some expert tensors from late Ornith layers are intentionally left on the CPU.
+Target KV deliberately stays Q8_0. Draft KV is only speculative state: every accepted token is verified by the Q8 target, so draft quantization can change speed/acceptance but not final target output.
 
-This placement assumes llama.cpp sees the V100 as `CUDA0` and the secondary NVIDIA GPU as `CUDA1`. It predates the RTX 2080 Ti Qwen retune and remains separately overrideable through `ORNITH15_EXTRA_ARGS`.
+The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0.025137 (the old `AD-Q5_K-Q4_K`) to 0.015793 and top-1 agreement from 93.52% to 94.85%. The exact candidate GGUF tensor layout was allocation-tested at 4x400k with Q8 target KV, the CPU vision projector, and MTP2. MTP3 also starts only with a much tighter ~35 MiB RTX margin, so MTP2 is the safer default; in a matched current-weight test MTP2 gave 85.70 TG/s versus 91.24 for MTP3 with identical target output.
 
-For a different GPU layout, edit:
-
-```text
-~/.local/share/local-llm-setup/config/config.env
-```
-
-`ORNITH15_EXTRA_ARGS` can replace the default tensor placement completely.
+Ornith is native at 262144. The launcher enables YaRN and the `qwen35moe.context_length` override only above native context.
 
 ## Cache preservation
 
@@ -156,7 +148,9 @@ While a model is running, llama.cpp uses its normal RAM prompt cache and `--cach
 
 When llama-swap needs to unload a model, `llama_cache_proxy.py` waits for active requests to finish and saves every explicit server slot with llama.cpp's `/slots/{id}?action=save` API. When that model is started again, all existing slot snapshots are restored before the wrapper reports itself healthy.
 
-For Ornith this means `slot0.bin` through `slot3.bin` are kept independently. Qwen currently uses one explicit 262k slot.
+A five-slot MTP-enabled restart test saved distinct 635/754/873/992/1111-token states and restored all five exact counts before the proxy became ready. The production profile uses four slots, so all four subagent contexts survive an Ornith -> Qwen -> Ornith swap.
+
+For Ornith this means `slot0.bin` through `slot3.bin` are kept independently. Qwen uses one 409600-token slot. Ornith snapshots are namespaced by model, context, parallel count and target KV format because its recurrent state is configuration-sensitive.
 
 By default snapshots are stored under:
 
@@ -165,6 +159,8 @@ By default snapshots are stored under:
 ```
 
 That makes save/restore fast but means snapshots disappear on reboot. If reboot persistence is more important, set `LLAMA_CACHE_ROOT` in `config.env` to a directory on normal storage.
+
+A 100k Ornith Q8 slot snapshot measured about 1.16 GB, so budget roughly **18-19 GB** for four nearly-full 400k slots. The Ornith llama-swap unload timeout is 300 seconds so the wrapper can finish those writes even on substantially slower storage.
 
 llama-swap's graceful unload timeout is set to 120 seconds so a multi-GB Qwen snapshot is not killed during save.
 
@@ -198,7 +194,7 @@ Useful settings include:
 LLAMA_SWAP_LISTEN="127.0.0.1:8080"
 LLAMA_CACHE_ROOT="/dev/shm/local-llm-setup"
 ORNITH15_PARALLEL=4
-ORNITH15_CTX_PER_SLOT=250112
+ORNITH15_CTX_PER_SLOT=400000
 QWEN38_CACHE_RAM_MIB=65536
 ORNITH15_CACHE_RAM_MIB=32768
 ORNITH15_MMPROJ="$HOME/models/local-llm-setup/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"
@@ -226,7 +222,7 @@ journalctl --user -u local-llm-setup.service -f
 
 ## Updating
 
-Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds both variants. Existing `config.env` is preserved. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
+Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds the shared CUDA server. Existing `config.env` is preserved. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
 
 ```bash
 cd local-llm-setup
@@ -238,4 +234,4 @@ The model downloader skips files that already exist.
 
 ## Notes
 
-This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith keeps its separately configurable conservative placement.
+This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith uses its separately configurable four-slot 400k/Q8 profile.

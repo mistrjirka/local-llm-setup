@@ -17,10 +17,12 @@ models:
 
   ornith15:
     name: "Ornith 1.5 35B-A3B"
-    description: "Ornith-1.5 AD-Q5_K-Q4_K, 4x250k Q8 KV, FORCE_MMQ, Shisa MTP3"
+    description: "Ornith-1.5 AD-Q6_K-Q5_K, 4x400k Q8 target KV, selective MoE MMQ, Shisa MTP2"
     cmd: @PREFIX@/bin/run-ornith15.sh ${PORT}
     checkEndpoint: /health
-    unloadTimeout: 120
+    # Four near-full 400k slot snapshots can total roughly 18-19 GB. /dev/shm
+    # is fast, but keep enough grace for slower LLAMA_CACHE_ROOT storage too.
+    unloadTimeout: 300
     ttl: 0
     useModelName: ornith-1.5-35b-a3b
     aliases:

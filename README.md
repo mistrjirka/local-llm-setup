@@ -155,17 +155,19 @@ Shared-400k snapshots use a separate namespace including the unified-pool size, 
 
 ## Cache preservation
 
-There are two cache layers in this setup.
+There are three cache levels in this setup.
 
-While the fixed-350k fallback profile is running, llama.cpp uses its normal RAM prompt cache and `--cache-idle-slots`, so interleaved requests do not needlessly destroy idle prefixes. Shared-400k mode instead keeps all four live unified-KV slots resident (`--no-cache-idle-slots`) so exact shared prefixes are not cleared behind the scheduler.
+1. **Live GPU slots.** Shared-400k mode keeps up to four active unified-KV slots resident, with exact common-prefix K/V cells shared between compatible agents. `--no-cache-idle-slots` avoids proactively evicting useful live branches.
+2. **Parked RAM agents.** The same server has a size-bounded host prompt cache (`ORNITH15_CACHE_RAM_MIB`, 32 GiB by default). When a live slot is replaced or KV pressure requires space, its complete target state, MTP draft state and speculative carry are parked in RAM. A later request automatically restores the deepest matching agent history; if a compatible parent prefix is still live, target and draft state restore directly onto that prefix instead of duplicating it. One physical slot can therefore serve multiple inactive agent sessions over time.
+3. **Process-restart persistence.** When llama-swap unloads the model, `llama_cache_proxy.py` saves both the live explicit slots and the whole parked-agent RAM bank. On the next model start the parked bank and live slots are restored before the wrapper reports healthy.
 
-When llama-swap needs to unload a model, `llama_cache_proxy.py` waits for active requests to finish and saves every explicit server slot with llama.cpp's `/slots/{id}?action=save` API. When that model is started again, all existing slot snapshots are restored before the wrapper reports itself healthy.
+The parked bank is persisted as `prompt-cache.bin` beside the normal slot files. A Qwen end-to-end test saved two parked agents as a 625.5 MB bank, killed/recreated the server, restored that bank in 141 ms, and resumed the parked agent with the same output SHA and MTP acceptance as the live-cache control. Dense Qwen3.8 and hybrid/recurrent Ornith both passed A -> B -> C -> A RAM-restore exactness tests.
 
 The wrapper also preserves optional `.draft` and `.spec` companions emitted by MTP-aware llama.cpp builds. Those carry the draft KV and the small per-sequence speculative state alongside the ordinary target `slotN.bin`, avoiding a long draft catch-up after a model swap. On older servers where these companions are absent, behavior is unchanged.
 
 The stronger shared-prefix restart test used one 10k parent plus three divergent ~11.5k children. All four states were saved, the Ornith process exited, a fresh process restored all four before the proxy became ready, and all four then continued concurrently with only 51 new prompt tokens each. The restored continuation matched a clean full-prefill reference SHA exactly, including MTP behavior.
 
-For Ornith this means `slot0.bin` through `slot3.bin` are kept independently. Qwen uses one 409600-token slot. Ornith snapshots are namespaced by model, context, parallel count and target KV format because its recurrent state is configuration-sensitive.
+For Ornith, `slot0.bin` through `slot3.bin` preserve the currently-live execution slots while `prompt-cache.bin` preserves additional parked sessions. Qwen still has one 409600-token live slot, but that slot can now multiplex multiple parked agent histories through the same RAM cache. Ornith snapshots are namespaced by model, context, parallel count and target/draft KV/MTP geometry because its recurrent and speculative state is configuration-sensitive.
 
 By default snapshots are stored under:
 
@@ -175,9 +177,9 @@ By default snapshots are stored under:
 
 That makes save/restore fast but means snapshots disappear on reboot. If reboot persistence is more important, set `LLAMA_CACHE_ROOT` in `config.env` to a directory on normal storage.
 
-A 100k Ornith Q8 target snapshot measured about 1.16 GB. MTP-aware saves now add `.draft` and tiny `.spec` companions; budget roughly **20 GB** for four nearly-full 400k snapshots. The Ornith llama-swap unload timeout is 300 seconds so the wrapper can finish those writes even on substantially slower storage.
+A 100k Ornith Q8 target snapshot measured about 1.16 GB. MTP-aware live-slot saves add `.draft` and tiny `.spec` companions; budget roughly **20 GB** for four nearly-full 400k live snapshots, plus up to `ORNITH15_CACHE_RAM_MIB` for the persisted parked-agent bank in the worst case. With the default 32 GiB RAM bank, `/dev/shm` or an alternate `LLAMA_CACHE_ROOT` should therefore have substantial free space. The Ornith llama-swap unload timeout is 300 seconds so the wrapper can finish those writes even on slower storage.
 
-llama-swap's graceful unload timeout is set to 120 seconds so a multi-GB Qwen snapshot is not killed during save.
+Qwen uses a 64 GiB RAM-cache ceiling by default, although actual persisted size is only the states currently parked. If `LLAMA_CACHE_ROOT` points to slower disk and the bank becomes large, increase llama-swap's graceful unload timeout accordingly.
 
 ## Reasoning effort
 

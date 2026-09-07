@@ -38,6 +38,8 @@ class State:
         self.cv = threading.Condition()
         self.last_restore: dict[str, dict[str, Any]] = {}
         self.last_save: dict[str, dict[str, Any]] = {}
+        self.last_prompt_cache_restore: dict[str, Any] = {}
+        self.last_prompt_cache_save: dict[str, Any] = {}
 
     @property
     def backend_base(self) -> str:
@@ -58,6 +60,12 @@ class State:
 
     def metadata_path(self, slot_id: int) -> Path:
         return self.snapshot_dir / f"{self.snapshot_name(slot_id)}.meta.json"
+
+    def prompt_cache_path(self) -> Path:
+        return self.snapshot_dir / "prompt-cache.bin"
+
+    def temp_prompt_cache_path(self) -> Path:
+        return self.snapshot_dir / "prompt-cache.bin.tmp"
 
     def request_json(self, path: str, body: dict[str, Any] | None = None, timeout: float = 60) -> Any:
         data = None if body is None else json.dumps(body).encode()
@@ -83,6 +91,32 @@ class State:
                 pass
             time.sleep(0.25)
         raise TimeoutError("llama-server did not become healthy before startup timeout")
+
+    def restore_prompt_cache(self) -> None:
+        if not self.args.persist_prompt_cache:
+            return
+        path = self.prompt_cache_path()
+        if not path.exists():
+            return
+        try:
+            result = self.request_json(
+                "/prompt-cache?action=restore",
+                {"filename": path.name},
+                timeout=self.args.slot_timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 405, 501):
+                print("cache-wrapper: server has no prompt-cache persistence endpoint; skipping", file=sys.stderr, flush=True)
+                return
+            raise
+        n_restored = int(result.get("n_restored", -1))
+        if n_restored < 0:
+            raise RuntimeError(f"prompt-cache restore verification failed: {result}")
+        self.last_prompt_cache_restore = result
+        print(
+            f"cache-wrapper: restored parked-agent bank: {n_restored} state(s), {result.get('n_read', 0)} bytes",
+            file=sys.stderr, flush=True,
+        )
 
     def restore_slot(self, slot_id: int) -> None:
         path = self.snapshot_path(slot_id)
@@ -111,6 +145,42 @@ class State:
     def restore_all(self) -> None:
         for slot_id in range(self.args.slot_count):
             self.restore_slot(slot_id)
+
+    def save_prompt_cache(self) -> None:
+        if not self.args.persist_prompt_cache:
+            return
+        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        final = self.prompt_cache_path()
+        temp = self.temp_prompt_cache_path()
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            result = self.request_json(
+                "/prompt-cache?action=save",
+                {"filename": temp.name},
+                timeout=self.args.slot_timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 405, 501):
+                print("cache-wrapper: server has no prompt-cache persistence endpoint; skipping", file=sys.stderr, flush=True)
+                return
+            # A model with RAM cache disabled returns a normal server error; leave any old bank untouched.
+            if exc.code in (400, 422):
+                print(f"cache-wrapper: prompt-cache persistence unavailable: HTTP {exc.code}", file=sys.stderr, flush=True)
+                return
+            raise
+        n_saved = int(result.get("n_saved", -1))
+        n_written = int(result.get("n_written", -1))
+        if n_saved < 0 or n_written < 0 or not temp.exists():
+            raise RuntimeError(f"prompt-cache save verification failed: {result}")
+        os.replace(temp, final)
+        self.last_prompt_cache_save = result
+        print(
+            f"cache-wrapper: saved parked-agent bank: {n_saved} state(s), {n_written} bytes",
+            file=sys.stderr, flush=True,
+        )
 
     def save_slot(self, slot_id: int) -> None:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -238,6 +308,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "slot_count": state.args.slot_count,
                 "last_restore": state.last_restore,
                 "last_save": state.last_save,
+                "last_prompt_cache_restore": state.last_prompt_cache_restore,
+                "last_prompt_cache_save": state.last_prompt_cache_save,
                 "child_pid": None if state.child is None else state.child.pid,
             })
             return
@@ -351,6 +423,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--backend-port", type=int, required=True)
     p.add_argument("--snapshot-dir", required=True)
     p.add_argument("--slot-count", type=int, default=1)
+    p.add_argument(
+        "--persist-prompt-cache", action="store_true",
+        help="persist llama-server's parked-agent RAM prompt cache alongside live slot snapshots",
+    )
     p.add_argument("--startup-timeout", type=float, default=300)
     p.add_argument("--slot-timeout", type=float, default=1800)
     p.add_argument("--drain-timeout", type=float, default=300)
@@ -403,6 +479,7 @@ def main() -> int:
     exit_code = 0
     try:
         state.wait_backend()
+        state.restore_prompt_cache()
         state.restore_all()
         state.ready = True
         print(
@@ -431,6 +508,7 @@ def main() -> int:
             exit_code = 1
         elif state.child is not None and state.child.poll() is None:
             try:
+                state.save_prompt_cache()
                 state.save_all()
             except Exception as exc:
                 print(f"cache-wrapper: failed to save cache: {exc}", file=sys.stderr, flush=True)

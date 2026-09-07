@@ -29,7 +29,7 @@ if [[ $SHARED_400K == 1 ]]; then
     --kv-unified-per-slot "$CTX_PER_SLOT"
     --slot-fork-prefix
   )
-  CACHE_ARGS=(--cache-ram 0 --no-cache-idle-slots)
+  CACHE_ARGS=(--cache-ram "${ORNITH15_CACHE_RAM_MIB:-32768}" --no-cache-idle-slots)
 else
   CTX_PER_SLOT=${ORNITH15_CTX_PER_SLOT:-350000}
   CTX_TOTAL=$((SLOTS * CTX_PER_SLOT))
@@ -116,6 +116,7 @@ exec python3 "$WRAPPER" \
   --backend-port "$BACKEND_PORT" \
   --snapshot-dir "$SNAPSHOT_DIR" \
   --slot-count "$SLOTS" \
+  --persist-prompt-cache \
   --parallel-tool-calls-default \
   --reasoning-budget-map "$REASONING_MAP" \
   -- "$SERVER" \

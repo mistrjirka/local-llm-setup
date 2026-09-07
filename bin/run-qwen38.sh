@@ -61,6 +61,7 @@ exec python3 "$WRAPPER" \
   --backend-port "$BACKEND_PORT" \
   --snapshot-dir "$SNAPSHOT_DIR" \
   --slot-count 1 \
+  --persist-prompt-cache \
   --parallel-tool-calls-default \
   -- "$SERVER" \
   --model "$QWEN38_MODEL" \

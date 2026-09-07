@@ -151,8 +151,8 @@ else
 fi
 
 # Migrate only exact historical defaults. User-customized values are preserved.
-# This lets an ordinary update move the old stock 250112/Q5 Ornith profile to
-# the new 400k/Q6-Q5 profile without turning config.env into a generated file.
+# This lets an ordinary update move historical stock Ornith settings to the
+# current 350k/Q6-Q5/Q8 defaults without turning config.env into a generated file.
 python3 - "$PREFIX/config/config.env" <<'PYMIG'
 from pathlib import Path
 import sys
@@ -179,9 +179,32 @@ for old, new in replacements.items():
     if old in text:
         text = text.replace(old, new)
         changed.append(old.split('=', 1)[0])
-if changed:
+# New optional knobs are append-only: expose them on existing installs without
+# changing the active fixed-350k behavior or overriding user values.
+optional_defaults = {
+    'ORNITH15_SHARED_400K': '0',
+    'ORNITH15_SHARED_CTX_PER_SLOT': '400000',
+    'ORNITH15_SHARED_KV_POOL': '1400000',
+    'ORNITH15_SHARED_YARN_SCALE': '1.52587890625',
+}
+lines = text.splitlines()
+existing = {line.split('=', 1)[0] for line in lines if '=' in line and not line.lstrip().startswith('#')}
+missing = [(key, value) for key, value in optional_defaults.items() if key not in existing]
+if missing:
+    marker = '# Optional shared-prefix 400k Ornith profile (fixed 350k remains default).'
+    if marker not in lines:
+        if lines and lines[-1] != '':
+            lines.append('')
+        lines.append(marker)
+    lines.extend(f'{key}={value}' for key, value in missing)
+    text = '\n'.join(lines) + '\n'
+
+if changed or missing:
     p.write_text(text)
+if changed:
     print('==> Migrated legacy Ornith defaults: ' + ', '.join(changed))
+if missing:
+    print('==> Added optional Ornith shared-400k settings: ' + ', '.join(key for key, _ in missing))
 PYMIG
 
 # CLI paths override the corresponding configured model paths without replacing

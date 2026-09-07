@@ -141,17 +141,27 @@ The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0
 
 Ornith is native at 262144. The launcher enables YaRN and the `qwen35moe.context_length` override only above native context. Reducing the cap from four 400k slots to four 350k slots saves roughly **2.7-2.9 GiB of reserved Q8 KV** on this GPU pair; it does not slow inference and reduces attention work when an agent actually reaches the shorter limit.
 
+### Optional shared-prefix 400k mode
+
+Set `ORNITH15_SHARED_400K=1` to expose **four logical 400000-token slots** while reserving a **1,400,000-token physical unified Q8 KV pool**. This mode keeps the same Q6/Q5 target weights, Q8 target/draft KV, MTP3, CPU vision projector and 14:35 placement. It adds llama.cpp's exact `--slot-fork-prefix` path so subagents branching from the same parent reference the same attention-KV cells instead of duplicating their common prefix.
+
+The capacity is intentionally conditional rather than four independent 400k guarantees. For four histories of length `L_i` with a common prefix `P`, physical attention-KV occupancy is approximately `sum(L_i) - 3P`. At four full 400k histories, the 1.4M pool therefore needs at least **66,667 common-prefix tokens**. A 100k common parent leaves about 100k tokens of additional physical-pool margin at four full logical caps. Completely unrelated four-way 400k histories still need 1.6M cells and do not fit this GPU pair.
+
+The final production geometry was capacity-tested on the V100 32 GB + RTX 2080 Ti 22 GB pair: all four slots reported `n_ctx=400000`, with Q8 target and draft KV plus MTP3 enabled. Startup used about **20.99/22.0 GiB** on the RTX 2080 Ti and **31.99/32.5 GiB** on the V100. The physical KV buffer is preallocated, so growing a shared agent does not progressively allocate more VRAM. The 350k fixed-slot profile remains the default because it guarantees capacity even when all four histories are unrelated.
+
+Shared-400k snapshots use a separate namespace including the unified-pool size, target/draft KV types, MTP depth and draft-model name. Do not reuse fixed-slot snapshots across the two layouts.
+
 ## Cache preservation
 
 There are two cache layers in this setup.
 
-While a model is running, llama.cpp uses its normal RAM prompt cache and `--cache-idle-slots`, so interleaved requests do not needlessly destroy idle prefixes.
+While the default fixed-slot profile is running, llama.cpp uses its normal RAM prompt cache and `--cache-idle-slots`, so interleaved requests do not needlessly destroy idle prefixes. Shared-400k mode instead keeps all four live unified-KV slots resident (`--no-cache-idle-slots`) so exact shared prefixes are not cleared behind the scheduler.
 
 When llama-swap needs to unload a model, `llama_cache_proxy.py` waits for active requests to finish and saves every explicit server slot with llama.cpp's `/slots/{id}?action=save` API. When that model is started again, all existing slot snapshots are restored before the wrapper reports itself healthy.
 
 The wrapper also preserves optional `.draft` and `.spec` companions emitted by MTP-aware llama.cpp builds. Those carry the draft KV and the small per-sequence speculative state alongside the ordinary target `slotN.bin`, avoiding a long draft catch-up after a model swap. On older servers where these companions are absent, behavior is unchanged.
 
-A five-slot MTP-enabled restart test saved distinct 635/754/873/992/1111-token states and restored all five exact counts before the proxy became ready. The production profile uses four slots, so all four subagent contexts survive an Ornith -> Qwen -> Ornith swap.
+The stronger shared-prefix restart test used one 10k parent plus three divergent ~11.5k children. All four states were saved, the Ornith process exited, a fresh process restored all four before the proxy became ready, and all four then continued concurrently with only 51 new prompt tokens each. The restored continuation matched a clean full-prefill reference SHA exactly, including MTP behavior.
 
 For Ornith this means `slot0.bin` through `slot3.bin` are kept independently. Qwen uses one 409600-token slot. Ornith snapshots are namespaced by model, context, parallel count and target KV format because its recurrent state is configuration-sensitive.
 
@@ -163,7 +173,7 @@ By default snapshots are stored under:
 
 That makes save/restore fast but means snapshots disappear on reboot. If reboot persistence is more important, set `LLAMA_CACHE_ROOT` in `config.env` to a directory on normal storage.
 
-A 100k Ornith Q8 slot snapshot measured about 1.16 GB, so budget roughly **18-19 GB** for four nearly-full 400k slots. The Ornith llama-swap unload timeout is 300 seconds so the wrapper can finish those writes even on substantially slower storage.
+A 100k Ornith Q8 target snapshot measured about 1.16 GB. MTP-aware saves now add `.draft` and tiny `.spec` companions; budget roughly **20 GB** for four nearly-full 400k snapshots. The Ornith llama-swap unload timeout is 300 seconds so the wrapper can finish those writes even on substantially slower storage.
 
 llama-swap's graceful unload timeout is set to 120 seconds so a multi-GB Qwen snapshot is not killed during save.
 
@@ -198,6 +208,11 @@ LLAMA_SWAP_LISTEN="127.0.0.1:8080"
 LLAMA_CACHE_ROOT="/dev/shm/local-llm-setup"
 ORNITH15_PARALLEL=4
 ORNITH15_CTX_PER_SLOT=350000
+# Optional: four logical 400k slots over a 1.4M shared physical Q8 KV pool.
+# Requires shared agent prefixes for aggregate capacity; 350k fixed remains default.
+ORNITH15_SHARED_400K=0
+ORNITH15_SHARED_CTX_PER_SLOT=400000
+ORNITH15_SHARED_KV_POOL=1400000
 QWEN38_CACHE_RAM_MIB=65536
 ORNITH15_CACHE_RAM_MIB=32768
 ORNITH15_MMPROJ="$HOME/models/local-llm-setup/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"
@@ -225,7 +240,7 @@ journalctl --user -u local-llm-setup.service -f
 
 ## Updating
 
-Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds the shared CUDA server. Existing `config.env` is preserved. The installer migrates only the exact old stock Ornith model/MTP paths and `250112` context default; customized values are left untouched. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
+Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds the shared CUDA server. Existing `config.env` values are preserved. The installer migrates only exact historical stock Ornith defaults, leaves customized values untouched, and appends the new shared-400k option keys only when they are missing. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
 
 ```bash
 cd local-llm-setup
@@ -237,4 +252,4 @@ The model downloader skips files that already exist.
 
 ## Notes
 
-This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith uses its separately configurable four-slot 400k/Q8 profile.
+This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith defaults to four fixed 350k/Q8 slots and offers an opt-in shared-prefix 400k/Q8 profile.

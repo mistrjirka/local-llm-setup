@@ -11,9 +11,33 @@ SERVER="$ROOT/llama.cpp/build-qwen/bin/llama-server"
 WRAPPER="$ROOT/bin/llama_cache_proxy.py"
 BACKEND_PORT=${ORNITH15_BACKEND_PORT:-$((PORT + 10000))}
 SLOTS=${ORNITH15_PARALLEL:-4}
-CTX_PER_SLOT=${ORNITH15_CTX_PER_SLOT:-350000}
 NATIVE_CTX=${ORNITH15_NATIVE_CTX:-262144}
-CTX_TOTAL=$((SLOTS * CTX_PER_SLOT))
+SHARED_400K=${ORNITH15_SHARED_400K:-0}
+if [[ $SHARED_400K == 1 ]]; then
+  CTX_PER_SLOT=${ORNITH15_SHARED_CTX_PER_SLOT:-400000}
+  CTX_TOTAL=${ORNITH15_SHARED_KV_POOL:-1400000}
+  YARN_SCALE_OVERRIDE=${ORNITH15_SHARED_YARN_SCALE:-}
+  [[ $SLOTS -eq 4 ]] || { echo "ORNITH15_SHARED_400K is validated only with ORNITH15_PARALLEL=4" >&2; exit 2; }
+  (( CTX_TOTAL >= CTX_PER_SLOT && CTX_TOTAL <= SLOTS * CTX_PER_SLOT )) || {
+    echo "invalid shared KV pool: need CTX_PER_SLOT <= pool <= SLOTS*CTX_PER_SLOT" >&2
+    exit 2
+  }
+  REQUIRED_SHARED_PREFIX=$(( (SLOTS * CTX_PER_SLOT - CTX_TOTAL + SLOTS - 2) / (SLOTS - 1) ))
+  KV_MODE_TAG="kvu-pool${CTX_TOTAL}"
+  KV_ARGS=(
+    --kv-unified
+    --kv-unified-per-slot "$CTX_PER_SLOT"
+    --slot-fork-prefix
+  )
+  CACHE_ARGS=(--cache-ram 0 --no-cache-idle-slots)
+else
+  CTX_PER_SLOT=${ORNITH15_CTX_PER_SLOT:-350000}
+  CTX_TOTAL=$((SLOTS * CTX_PER_SLOT))
+  YARN_SCALE_OVERRIDE=${ORNITH15_YARN_SCALE:-}
+  KV_MODE_TAG="fixed"
+  KV_ARGS=(--no-kv-unified)
+  CACHE_ARGS=(--cache-ram "${ORNITH15_CACHE_RAM_MIB:-32768}" --cache-idle-slots)
+fi
 DEVICE_ORDER=${ORNITH15_DEVICE_ORDER:-CUDA1,CUDA0}
 TENSOR_SPLIT=${ORNITH15_TENSOR_SPLIT:-14,35}
 CACHE_TYPE_K=${ORNITH15_CACHE_TYPE_K:-q8_0}
@@ -29,12 +53,22 @@ REASONING_MAP=${ORNITH15_REASONING_MAP:-'{"none":0,"low":2048,"medium":8192,"hig
 # Hybrid/recurrent slot states depend on the model/context/parallel geometry.
 # Keep incompatible snapshots apart so a profile change cannot poison startup.
 MODEL_TAG=$(basename -- "${ORNITH15_MODEL%.gguf}")
-SNAPSHOT_DIR=${LLAMA_CACHE_ROOT}/ornith15/${MODEL_TAG}/ctx${CTX_PER_SLOT}-p${SLOTS}-${CACHE_TYPE_K}-${CACHE_TYPE_V}
+MTP_MODEL_TAG=$(basename -- "${ORNITH15_MTP_MODEL%.gguf}")
+if [[ $SHARED_400K == 1 ]]; then
+  # Shared-layout snapshots include draft identity because .draft/.spec companions
+  # are only valid for the exact MTP configuration that produced them.
+  SNAPSHOT_DIR=${LLAMA_CACHE_ROOT}/ornith15/${MODEL_TAG}/ctx${CTX_PER_SLOT}-p${SLOTS}-${CACHE_TYPE_K}-${CACHE_TYPE_V}-${KV_MODE_TAG}-d${DRAFT_CACHE_TYPE_K}-${DRAFT_CACHE_TYPE_V}-mtp${MTP_N_MAX}-${MTP_MODEL_TAG}
+  echo "Ornith shared-400k: 4x${CTX_PER_SLOT} logical over ${CTX_TOTAL} physical KV; full-capacity use needs >=${REQUIRED_SHARED_PREFIX} shared-prefix tokens" >&2
+else
+  # Preserve the historical fixed-slot path so enabling the new optional profile
+  # does not invalidate existing 350k snapshots.
+  SNAPSHOT_DIR=${LLAMA_CACHE_ROOT}/ornith15/${MODEL_TAG}/ctx${CTX_PER_SLOT}-p${SLOTS}-${CACHE_TYPE_K}-${CACHE_TYPE_V}
+fi
 mkdir -p "$SNAPSHOT_DIR"
 
 YARN_ARGS=()
 if (( CTX_PER_SLOT > NATIVE_CTX )); then
-  YARN_SCALE=${ORNITH15_YARN_SCALE:-$(awk -v n="$CTX_PER_SLOT" -v d="$NATIVE_CTX" 'BEGIN { printf "%.10g", n/d }')}
+  YARN_SCALE=${YARN_SCALE_OVERRIDE:-$(awk -v n="$CTX_PER_SLOT" -v d="$NATIVE_CTX" 'BEGIN { printf "%.10g", n/d }')}
   YARN_ARGS=(
     --override-kv "qwen35moe.context_length=int:${CTX_PER_SLOT}"
     --rope-scaling yarn
@@ -90,12 +124,11 @@ exec python3 "$WRAPPER" \
   "${MMPROJ_ARGS[@]}" \
   --ctx-size "$CTX_TOTAL" \
   --parallel "$SLOTS" \
-  --no-kv-unified \
+  "${KV_ARGS[@]}" \
   "${YARN_ARGS[@]}" \
   --cache-type-k "$CACHE_TYPE_K" \
   --cache-type-v "$CACHE_TYPE_V" \
-  --cache-ram "${ORNITH15_CACHE_RAM_MIB:-32768}" \
-  --cache-idle-slots \
+  "${CACHE_ARGS[@]}" \
   --flash-attn on \
   --batch-size 2048 \
   --ubatch-size "$UBATCH_SIZE" \

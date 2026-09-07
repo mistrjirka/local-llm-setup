@@ -116,10 +116,12 @@ class State:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         final = self.snapshot_path(slot_id)
         temp = self.temp_snapshot_path(slot_id)
-        try:
-            temp.unlink()
-        except FileNotFoundError:
-            pass
+        companions = (".draft", ".spec")
+        for path in (temp, *(Path(str(temp) + suffix) for suffix in companions)):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
         result = self.request_json(
             f"/slots/{slot_id}?action=save",
             {"filename": temp.name},
@@ -129,9 +131,23 @@ class State:
         if n_saved < 0 or not temp.exists() or temp.stat().st_size == 0:
             raise RuntimeError(f"slot {slot_id} save verification failed: {result}")
         os.replace(temp, final)
+        companion_bytes: dict[str, int] = {}
+        for suffix in companions:
+            temp_companion = Path(str(temp) + suffix)
+            final_companion = Path(str(final) + suffix)
+            if temp_companion.exists():
+                os.replace(temp_companion, final_companion)
+                companion_bytes[suffix.removeprefix(".")] = final_companion.stat().st_size
+            else:
+                # Do not pair a fresh target state with stale speculative companions.
+                try:
+                    final_companion.unlink()
+                except FileNotFoundError:
+                    pass
         meta = {
             "n_saved": n_saved,
             "bytes": final.stat().st_size,
+            "companions": companion_bytes,
             "saved_at": time.time(),
             "slot_id": slot_id,
         }

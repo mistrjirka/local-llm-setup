@@ -149,6 +149,8 @@ While a model is running, llama.cpp uses its normal RAM prompt cache and `--cach
 
 When llama-swap needs to unload a model, `llama_cache_proxy.py` waits for active requests to finish and saves every explicit server slot with llama.cpp's `/slots/{id}?action=save` API. When that model is started again, all existing slot snapshots are restored before the wrapper reports itself healthy.
 
+The wrapper also preserves optional `.draft` and `.spec` companions emitted by MTP-aware llama.cpp builds. Those carry the draft KV and the small per-sequence speculative state alongside the ordinary target `slotN.bin`, avoiding a long draft catch-up after a model swap. On older servers where these companions are absent, behavior is unchanged.
+
 A five-slot MTP-enabled restart test saved distinct 635/754/873/992/1111-token states and restored all five exact counts before the proxy became ready. The production profile uses four slots, so all four subagent contexts survive an Ornith -> Qwen -> Ornith swap.
 
 For Ornith this means `slot0.bin` through `slot3.bin` are kept independently. Qwen uses one 409600-token slot. Ornith snapshots are namespaced by model, context, parallel count and target KV format because its recurrent state is configuration-sensitive.

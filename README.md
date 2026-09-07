@@ -119,7 +119,7 @@ To return to native context, set `QWEN38_CTX_SIZE=262144`; the launcher then omi
 
 ## Long-context subagent profile
 
-The default Ornith profile is **four persistent 350000-token slots**. The intent is to spend VRAM on the higher-quality target weights and keep both target and MTP KV at Q8 rather than squeezing the final 50k tokens by lowering cache precision:
+The conservative fallback Ornith profile is **four persistent 350000-token fixed slots**. The intent is to spend VRAM on the higher-quality target weights and keep both target and MTP KV at Q8 rather than squeezing the final 50k tokens by lowering cache precision:
 
 ```text
 4 fixed slots x 350000 tokens
@@ -141,13 +141,13 @@ The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0
 
 Ornith is native at 262144. The launcher enables YaRN and the `qwen35moe.context_length` override only above native context. Reducing the cap from four 400k slots to four 350k slots saves roughly **2.7-2.9 GiB of reserved Q8 KV** on this GPU pair; it does not slow inference and reduces attention work when an agent actually reaches the shorter limit.
 
-### Optional shared-prefix 400k mode
+### Default shared-prefix 400k mode
 
-Set `ORNITH15_SHARED_400K=1` to expose **four logical 400000-token slots** while reserving a **1,400,000-token physical unified Q8 KV pool**. This mode keeps the same Q6/Q5 target weights, Q8 target/draft KV, MTP3, CPU vision projector and 14:35 placement. It adds llama.cpp's exact `--slot-fork-prefix` path so subagents branching from the same parent reference the same attention-KV cells instead of duplicating their common prefix.
+The default `ORNITH15_SHARED_400K=1` exposes **four logical 400000-token slots** while reserving a **1,400,000-token physical unified Q8 KV pool**. This mode keeps the same Q6/Q5 target weights, Q8 target/draft KV, MTP3, CPU vision projector and 14:35 placement. It adds llama.cpp's exact `--slot-fork-prefix` path so subagents branching from the same parent reference the same attention-KV cells instead of duplicating their common prefix.
 
 The capacity is intentionally conditional rather than four independent 400k guarantees. For four histories of length `L_i` with a common prefix `P`, physical attention-KV occupancy is approximately `sum(L_i) - 3P`. At four full 400k histories, the 1.4M pool therefore needs at least **66,667 common-prefix tokens**. A 100k common parent leaves about 100k tokens of additional physical-pool margin at four full logical caps. Completely unrelated four-way 400k histories still need 1.6M cells and do not fit this GPU pair.
 
-The final production geometry was capacity-tested on the V100 32 GB + RTX 2080 Ti 22 GB pair: all four slots reported `n_ctx=400000`, with Q8 target and draft KV plus MTP3 enabled. Startup used about **20.99/22.0 GiB** on the RTX 2080 Ti and **31.99/32.5 GiB** on the V100. The physical KV buffer is preallocated, so growing a shared agent does not progressively allocate more VRAM. The 350k fixed-slot profile remains the default because it guarantees capacity even when all four histories are unrelated.
+The final production geometry was capacity-tested on the V100 32 GB + RTX 2080 Ti 22 GB pair: all four slots reported `n_ctx=400000`, with Q8 target and draft KV plus MTP3 enabled. Startup used about **20.99/22.0 GiB** on the RTX 2080 Ti and **31.99/32.5 GiB** on the V100. The physical KV buffer is preallocated, so growing a shared agent does not progressively allocate more VRAM. The 400k shared-prefix profile is now the default. Set `ORNITH15_SHARED_400K=0` to use the conservative 350k fixed-slot profile when four completely unrelated histories must each have guaranteed capacity.
 
 Shared-400k snapshots use a separate namespace including the unified-pool size, target/draft KV types, MTP depth and draft-model name. Do not reuse fixed-slot snapshots across the two layouts.
 
@@ -155,7 +155,7 @@ Shared-400k snapshots use a separate namespace including the unified-pool size, 
 
 There are two cache layers in this setup.
 
-While the default fixed-slot profile is running, llama.cpp uses its normal RAM prompt cache and `--cache-idle-slots`, so interleaved requests do not needlessly destroy idle prefixes. Shared-400k mode instead keeps all four live unified-KV slots resident (`--no-cache-idle-slots`) so exact shared prefixes are not cleared behind the scheduler.
+While the fixed-350k fallback profile is running, llama.cpp uses its normal RAM prompt cache and `--cache-idle-slots`, so interleaved requests do not needlessly destroy idle prefixes. Shared-400k mode instead keeps all four live unified-KV slots resident (`--no-cache-idle-slots`) so exact shared prefixes are not cleared behind the scheduler.
 
 When llama-swap needs to unload a model, `llama_cache_proxy.py` waits for active requests to finish and saves every explicit server slot with llama.cpp's `/slots/{id}?action=save` API. When that model is started again, all existing slot snapshots are restored before the wrapper reports itself healthy.
 
@@ -208,9 +208,9 @@ LLAMA_SWAP_LISTEN="127.0.0.1:8080"
 LLAMA_CACHE_ROOT="/dev/shm/local-llm-setup"
 ORNITH15_PARALLEL=4
 ORNITH15_CTX_PER_SLOT=350000
-# Optional: four logical 400k slots over a 1.4M shared physical Q8 KV pool.
-# Requires shared agent prefixes for aggregate capacity; 350k fixed remains default.
-ORNITH15_SHARED_400K=0
+# Default: four logical 400k slots over a 1.4M shared physical Q8 KV pool.
+# Requires shared agent prefixes for aggregate capacity; set 0 for fixed 350k.
+ORNITH15_SHARED_400K=1
 ORNITH15_SHARED_CTX_PER_SLOT=400000
 ORNITH15_SHARED_KV_POOL=1400000
 QWEN38_CACHE_RAM_MIB=65536
@@ -252,4 +252,4 @@ The model downloader skips files that already exist.
 
 ## Notes
 
-This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith defaults to four fixed 350k/Q8 slots and offers an opt-in shared-prefix 400k/Q8 profile.
+This repository is deliberately hardware-specific rather than a generic llama.cpp installer. The Qwen default targets 54 GB of combined NVIDIA VRAM from a V100 32 GB + RTX 2080 Ti 22 GB and uses the validated 409600-token YaRN profile. The wrapper itself is model-agnostic; Qwen tensor placement and CUDA dispatch settings are tuned for this machine, while Ornith defaults to four shared-prefix 400k/Q8 logical slots over a 1.4M physical pool; fixed 350k/Q8 remains available as the conservative fallback.

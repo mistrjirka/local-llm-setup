@@ -173,6 +173,7 @@ replacements = {
     'ORNITH15_DRAFT_UBATCH_SIZE=64': 'ORNITH15_DRAFT_UBATCH_SIZE=128',
     'ORNITH15_MTP_N_MAX=2': 'ORNITH15_MTP_N_MAX=3',
     'ORNITH15_MTP_DEVICE="CUDA0"': 'ORNITH15_MTP_DEVICE="CUDA1"',
+    'ORNITH15_SHARED_400K=0': 'ORNITH15_SHARED_400K=1',
 }
 changed = []
 for old, new in replacements.items():
@@ -182,7 +183,7 @@ for old, new in replacements.items():
 # New optional knobs are append-only: expose them on existing installs without
 # changing the active fixed-350k behavior or overriding user values.
 optional_defaults = {
-    'ORNITH15_SHARED_400K': '0',
+    'ORNITH15_SHARED_400K': '1',
     'ORNITH15_SHARED_CTX_PER_SLOT': '400000',
     'ORNITH15_SHARED_KV_POOL': '1400000',
     'ORNITH15_SHARED_YARN_SCALE': '1.52587890625',
@@ -191,7 +192,7 @@ lines = text.splitlines()
 existing = {line.split('=', 1)[0] for line in lines if '=' in line and not line.lstrip().startswith('#')}
 missing = [(key, value) for key, value in optional_defaults.items() if key not in existing]
 if missing:
-    marker = '# Optional shared-prefix 400k Ornith profile (fixed 350k remains default).'
+    marker = '# Shared-prefix 400k Ornith profile (default; set ORNITH15_SHARED_400K=0 for fixed 350k).'
     if marker not in lines:
         if lines and lines[-1] != '':
             lines.append('')

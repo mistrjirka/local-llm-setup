@@ -119,26 +119,27 @@ To return to native context, set `QWEN38_CTX_SIZE=262144`; the launcher then omi
 
 ## Long-context subagent profile
 
-The default Ornith profile is **four persistent 400000-token slots** with target Q8 KV:
+The default Ornith profile is **four persistent 350000-token slots**. The intent is to spend VRAM on the higher-quality target weights and keep both target and MTP KV at Q8 rather than squeezing the final 50k tokens by lowering cache precision:
 
 ```text
-4 fixed slots x 400000 tokens
-YaRN: 400000 / 262144 = 1.52587890625
+4 fixed slots x 350000 tokens
+YaRN: 350000 / 262144 = 1.33514404296875
 target KV: Q8_0 / Q8_0
 target weights: AD-Q6_K-Q5_K (26.25 GB)
-split mode: layer, CUDA1,CUDA0, split 4:5
-Shisa 12K KL-distilled Q5_0 draft on CUDA0 (V100)
-MTP n-max=2
-draft KV: Q4_0 / Q4_0
-2048 batch / 128 ubatch / 64 draft ubatch
+split mode: layer, device order CUDA1,CUDA0, split 14:35
+Shisa 12K KL-distilled Q5_0 draft on CUDA1 (RTX 2080 Ti)
+MTP n-max=3
+draft KV: Q8_0 / Q8_0
+2048 batch / 256 ubatch / 128 draft ubatch
+1 pipeline copy
 BF16 vision projector on CPU
 ```
 
-Target KV deliberately stays Q8_0. Draft KV is only speculative state: every accepted token is verified by the Q8 target, so draft quantization can change speed/acceptance but not final target output.
+The exact `AD-Q6_K-Q5_K` GGUF tensor layout was capacity-tested with the production geometry, including the CPU vision projector. At startup the RTX 2080 Ti used about **20.22/22.0 GiB** and the V100 about **31.48/32.5 GiB**, leaving roughly **1.78 GiB** and **1.02 GiB** respectively. All four slots reported `n_ctx=350000` with MTP enabled. The MTP draft is deliberately placed on `CUDA1`; placing it on the V100 crosses the V100 allocation boundary.
 
-The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0.025137 (the old `AD-Q5_K-Q4_K`) to 0.015793 and top-1 agreement from 93.52% to 94.85%. The exact candidate GGUF tensor layout was allocation-tested at 4x400k with Q8 target KV, the CPU vision projector, and MTP2. MTP3 also starts only with a much tighter ~35 MiB RTX margin, so MTP2 is the safer default; in a matched current-weight test MTP2 gave 85.70 TG/s versus 91.24 for MTP3 with identical target output.
+The 26.25 GB `AD-Q6_K-Q5_K` improves AtomicChat's BF16-reference mean KLD from 0.025137 (the old `AD-Q5_K-Q4_K`) to 0.015793 and top-1 agreement from 93.52% to 94.85%. The Shisa MTP head is quantized fully to Q5_0: in a matched local 100k+1k+256 test it used 1.36 GB, reached **99.70 TG/s** with **68.4%** draft acceptance, and produced the same target-token SHA as the older 2.78 GB BF16-core/Q8 draft. Target verification makes draft-weight quantization lossless with respect to final target tokens.
 
-Ornith is native at 262144. The launcher enables YaRN and the `qwen35moe.context_length` override only above native context.
+Ornith is native at 262144. The launcher enables YaRN and the `qwen35moe.context_length` override only above native context. Reducing the cap from four 400k slots to four 350k slots saves roughly **2.7-2.9 GiB of reserved Q8 KV** on this GPU pair; it does not slow inference and reduces attention work when an agent actually reaches the shorter limit.
 
 ## Cache preservation
 
@@ -194,7 +195,7 @@ Useful settings include:
 LLAMA_SWAP_LISTEN="127.0.0.1:8080"
 LLAMA_CACHE_ROOT="/dev/shm/local-llm-setup"
 ORNITH15_PARALLEL=4
-ORNITH15_CTX_PER_SLOT=400000
+ORNITH15_CTX_PER_SLOT=350000
 QWEN38_CACHE_RAM_MIB=65536
 ORNITH15_CACHE_RAM_MIB=32768
 ORNITH15_MMPROJ="$HOME/models/local-llm-setup/ornith15/mmproj-Ornith-1.5-35B-BF16.gguf"

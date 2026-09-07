@@ -150,6 +150,31 @@ else
   echo "==> Keeping existing $PREFIX/config/config.env"
 fi
 
+# Migrate only exact historical defaults. User-customized values are preserved.
+# This lets an ordinary update move the old stock 250112/Q5 Ornith profile to
+# the new 400k/Q6-Q5 profile without turning config.env into a generated file.
+python3 - "$PREFIX/config/config.env" <<'PYMIG'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+text = p.read_text()
+replacements = {
+    'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf"':
+        'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf"',
+    'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-bf16block-q8-embedout.gguf"':
+        'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-all-Q5_0.gguf"',
+    'ORNITH15_CTX_PER_SLOT=250112': 'ORNITH15_CTX_PER_SLOT=400000',
+}
+changed = []
+for old, new in replacements.items():
+    if old in text:
+        text = text.replace(old, new)
+        changed.append(old.split('=', 1)[0])
+if changed:
+    p.write_text(text)
+    print('==> Migrated legacy Ornith defaults: ' + ', '.join(changed))
+PYMIG
+
 # CLI paths override the corresponding configured model paths without replacing
 # the rest of an existing config.env.
 python3 - "$PREFIX/config/config.env" "$DENSE_MODEL" "$MOE_MODEL" "$MTP_MODEL" "$MMPROJ_MODEL" <<'PYCFG'

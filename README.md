@@ -222,7 +222,7 @@ journalctl --user -u local-llm-setup.service -f
 
 ## Updating
 
-Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds the shared CUDA server. Existing `config.env` is preserved. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
+Run the installer again. It fast-forwards the configured llama.cpp branch and rebuilds the shared CUDA server. Existing `config.env` is preserved. The installer migrates only the exact old stock Ornith model/MTP paths and `250112` context default; customized values are left untouched. The default branch is `v100-optimized`; set `LLAMA_CPP_REF=<branch-or-tag>` when invoking `install.sh` to test another branch without editing the installer.
 
 ```bash
 cd local-llm-setup

@@ -17,7 +17,7 @@ models:
 
   ornith15:
     name: "Ornith 1.5 35B-A3B"
-    description: "Ornith-1.5 AD-Q6_K-Q5_K, 4x400k shared-prefix Q8 target+draft KV, selective MoE MMQ, Shisa MTP3"
+    description: "Ornith-1.5 AD-Q6_K-Q5_K, 4x400k shared-prefix Q8 target/q4 draft KV, selective MoE MMQ, Shisa MTP1"
     cmd: @PREFIX@/bin/run-ornith15.sh ${PORT}
     checkEndpoint: /health
     # Four near-full 350k slot snapshots can total roughly 16-17 GB. /dev/shm

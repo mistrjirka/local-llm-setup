@@ -59,7 +59,7 @@ else
   echo "already present: $ORNITH15_MMPROJ"
 fi
 
-echo "==> Shisa 12K KL-distilled Ornith-1.5 MTP draft (Q5_0)"
+echo "==> Shisa 12K KL-distilled Ornith-1.5 MTP draft (Q4_0)"
 if [[ ! -s $ORNITH15_MTP_MODEL ]]; then
   CONVERT_VENV=$ROOT/venv-convert
   if [[ ! -x $CONVERT_VENV/bin/python ]]; then
@@ -75,9 +75,9 @@ if [[ ! -s $ORNITH15_MTP_MODEL ]]; then
       shisa-ai/Ornith-1.5-35B-A3B-MTP
   fi
 
-  # Fully-Q5_0 was smaller and faster than the old BF16-core/Q8 draft in
-  # matched target-verified local tests.
-  "$SRC/build-qwen/bin/llama-quantize" "$BF16" "$ORNITH15_MTP_MODEL" Q5_0
+  # Fully-Q4_0 is the validated four-slot production draft. Target verification
+  # preserves final target-token correctness while the smaller draft saves VRAM.
+  "$SRC/build-qwen/bin/llama-quantize" "$BF16" "$ORNITH15_MTP_MODEL" Q4_0
   if [[ ${KEEP_MTP_BF16:-0} != 1 ]]; then
     rm -f "$BF16"
   fi

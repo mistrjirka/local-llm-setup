@@ -152,7 +152,7 @@ fi
 
 # Migrate only exact historical defaults. User-customized values are preserved.
 # This lets an ordinary update move historical stock Ornith settings to the
-# current 350k/Q6-Q5/Q8 defaults without turning config.env into a generated file.
+# current Q6-Q5/Q4-MTP1 defaults without turning config.env into a generated file.
 python3 - "$PREFIX/config/config.env" <<'PYMIG'
 from pathlib import Path
 import sys
@@ -162,17 +162,21 @@ replacements = {
     'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf"':
         'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf"',
     'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-bf16block-q8-embedout.gguf"':
-        'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-all-Q5_0.gguf"',
+        'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-all-q4.gguf"',
+    'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-all-Q5_0.gguf"':
+        'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-all-q4.gguf"',
     'ORNITH15_CTX_PER_SLOT=250112': 'ORNITH15_CTX_PER_SLOT=350000',
     'ORNITH15_CTX_PER_SLOT=400000': 'ORNITH15_CTX_PER_SLOT=350000',
     'ORNITH15_YARN_SCALE=1.52587890625': 'ORNITH15_YARN_SCALE=1.33514404296875',
-    'ORNITH15_DRAFT_CACHE_TYPE_K=q4_0': 'ORNITH15_DRAFT_CACHE_TYPE_K=q8_0',
-    'ORNITH15_DRAFT_CACHE_TYPE_V=q4_0': 'ORNITH15_DRAFT_CACHE_TYPE_V=q8_0',
+    'ORNITH15_DRAFT_CACHE_TYPE_K=q8_0': 'ORNITH15_DRAFT_CACHE_TYPE_K=q4_0',
+    'ORNITH15_DRAFT_CACHE_TYPE_V=q8_0': 'ORNITH15_DRAFT_CACHE_TYPE_V=q4_0',
     'ORNITH15_TENSOR_SPLIT="4,5"': 'ORNITH15_TENSOR_SPLIT="14,35"',
-    'ORNITH15_UBATCH_SIZE=128': 'ORNITH15_UBATCH_SIZE=256',
-    'ORNITH15_DRAFT_UBATCH_SIZE=64': 'ORNITH15_DRAFT_UBATCH_SIZE=128',
-    'ORNITH15_MTP_N_MAX=2': 'ORNITH15_MTP_N_MAX=3',
-    'ORNITH15_MTP_DEVICE="CUDA0"': 'ORNITH15_MTP_DEVICE="CUDA1"',
+    'ORNITH15_UBATCH_SIZE=256': 'ORNITH15_UBATCH_SIZE=128',
+    'ORNITH15_DRAFT_UBATCH_SIZE=128': 'ORNITH15_DRAFT_UBATCH_SIZE=64',
+    'ORNITH15_MTP_N_MAX=2': 'ORNITH15_MTP_N_MAX=1',
+    'ORNITH15_MTP_N_MAX=3': 'ORNITH15_MTP_N_MAX=1',
+    'ORNITH15_MTP_DEVICE="CUDA0"': 'ORNITH15_MTP_DEVICE="CUDA1,CUDA0"',
+    'ORNITH15_MTP_DEVICE="CUDA1"': 'ORNITH15_MTP_DEVICE="CUDA1,CUDA0"',
     'ORNITH15_SHARED_400K=0': 'ORNITH15_SHARED_400K=1',
 }
 changed = []
@@ -187,6 +191,7 @@ optional_defaults = {
     'ORNITH15_SHARED_CTX_PER_SLOT': '400000',
     'ORNITH15_SHARED_KV_POOL': '1400000',
     'ORNITH15_SHARED_YARN_SCALE': '1.52587890625',
+    'ORNITH15_BATCH_SIZE': '512',
 }
 lines = text.splitlines()
 existing = {line.split('=', 1)[0] for line in lines if '=' in line and not line.lstrip().startswith('#')}

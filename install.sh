@@ -160,6 +160,7 @@ p = Path(sys.argv[1])
 text = p.read_text()
 replacements = {
     'LLAMA_SWAP_LISTEN="127.0.0.1:8080"': 'LLAMA_SWAP_LISTEN="0.0.0.0:2345"',
+    'LLAMA_SWAP_LISTEN="0.0.0.0:8080"': 'LLAMA_SWAP_LISTEN="0.0.0.0:2345"',
     'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q5_K-Q4_K.gguf"':
         'ORNITH15_MODEL="$HOME/models/local-llm-setup/ornith15/Ornith-1.5-35B-A3B-AD-Q6_K-Q5_K.gguf"',
     'ORNITH15_MTP_MODEL="$HOME/models/local-llm-setup/ornith15/mtp-shisa-ornith15-bf16block-q8-embedout.gguf"':

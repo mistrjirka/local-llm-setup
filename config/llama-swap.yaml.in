@@ -14,6 +14,7 @@ models:
     useModelName: qwen3.8-27b
     aliases:
       - Qwen3.8-27B
+      - qwen3.8-27b
 
   ornith15:
     name: "Ornith 1.5 35B-A3B"
@@ -27,6 +28,7 @@ models:
     useModelName: ornith-1.5-35b-a3b
     aliases:
       - Ornith-1.5-35B-A3B
+      - ornith-1.5-35b-a3b
 
 routing:
   router:

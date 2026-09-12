@@ -54,7 +54,7 @@ Start it with:
 ~/.local/bin/local-llm-swap
 ```
 
-The OpenAI-compatible API is then on `127.0.0.1:8080` by default. The configured model IDs are `qwen38` and `ornith15`.
+The OpenAI-compatible API is then on `0.0.0.0:2345` by default. The configured model IDs are `qwen38` and `ornith15`.
 
 ## What gets installed
 
@@ -208,7 +208,7 @@ The main local configuration file is:
 Useful settings include:
 
 ```bash
-LLAMA_SWAP_LISTEN="127.0.0.1:8080"
+LLAMA_SWAP_LISTEN="0.0.0.0:2345"
 LLAMA_CACHE_ROOT="/dev/shm/local-llm-setup"
 ORNITH15_PARALLEL=4
 ORNITH15_CTX_PER_SLOT=350000
